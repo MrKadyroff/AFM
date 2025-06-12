@@ -9,19 +9,18 @@
 // ==/UserScript==
 
 // Универсальное ожидание элемента
-async function waitForElement(selector, timeout = 1000) {
+async function waitForElement(selector, timeout = 200) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
         let el = document.querySelector(selector);
         if (el) return el;
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, 50));
     }
     return null;
 }
 
 // Открыть аккордеон по заголовку (если закрыт)
-async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 100) {
-    console.log("accc", headerText);
+async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 50) {
     let p = Array.from(document.querySelectorAll('p'))
         .find(e => e.textContent.trim().toLowerCase().includes(headerText.trim().toLowerCase()));
     if (!p) return false;
@@ -31,7 +30,7 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     // Клик только если закрыт (по стрелке вниз)
     if (!headerDiv.parentElement?.innerHTML.includes('M10L12')) {
         headerDiv.click();
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
     }
 
     // Ждем появления хотя бы одного поля (можно расширить на вложенные)
@@ -39,7 +38,7 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     while (Date.now() - start < timeout) {
         let appeared = expectedFieldNames.some(name => document.querySelector(`[name="${name}"]`));
         if (appeared) return true;
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
     }
     return false;
 }
@@ -113,7 +112,7 @@ async function selectDropdownUniversal(name, value) {
     if (!opener) return false;
     opener.focus();
     opener.click();
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 50));
 
     // Ищем input для поиска
     let input = null;
@@ -132,7 +131,7 @@ async function selectDropdownUniversal(name, value) {
     // Ждём появления и кликаем опцию
     let found = null;
     const start = Date.now();
-    while (Date.now() - start < 2000) {
+    while (Date.now() - start < 1000) {
         let opts = Array.from(document.querySelectorAll(`button[name="${name}"][type="button"]`));
         found = opts.find(btn => {
             if (btn.dataset && btn.dataset.name) {
@@ -141,11 +140,11 @@ async function selectDropdownUniversal(name, value) {
             return btn.textContent.trim().toLowerCase().includes(value.toLowerCase());
         });
         if (found) break;
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
     }
     if (found) {
         found.click();
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
         document.body.click();
         return true;
     }
@@ -167,7 +166,6 @@ async function getDataFromBuffer() {
     try {
         const clipboardText = await navigator.clipboard.readText();
         const fields = JSON.parse(clipboardText);
-        console.log("data", fields);
         return fields;
     } catch (err) {
         return null; // Чтобы не получить undefined
@@ -181,26 +179,30 @@ function showOverlay(text = "Загрузка...") {
     let overlay = document.createElement("div");
     overlay.id = "afm-loading-overlay";
     overlay.style = `
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.35);
-        z-index: 99999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 2rem;
-        color: white;
-        font-family: inherit;
-        transition: opacity 0.2s;
-    `;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    color: white;
+    font-family: inherit;
+    transition: opacity 0.2s;
+    pointer-events: all; /* <--- блокирует все клики */`;
     overlay.innerHTML = `
-        <div style="padding: 32px 48px; background: #282c34; border-radius: 16px; box-shadow: 0 8px 40px #0007;">
-            <span style="display:inline-block; margin-right:18px; vertical-align:middle;">
-                <svg style="vertical-align:middle;" width="40" height="40" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" stroke="#53e3a6" stroke-width="5" fill="none" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" repeatCount="indefinite" dur="1s" from="0 25 25" to="360 25 25"/></circle></svg>
-            </span>
-            <span>${text}</span>
-        </div>
-    `;
+    <div style="padding: 32px 48px; background: #282c34; border-radius: 16px; box-shadow: 0 8px 40px #0007;">
+      <span style="display:inline-block; margin-right:18px; vertical-align:middle;">
+  <svg style="vertical-align:middle;" width="40" height="40" viewBox="0 0 50 50">
+    <circle cx="25" cy="25" r="20" stroke="#53e3a6" stroke-width="5" fill="none" stroke-linecap="round">
+      <animateTransform attributeName="transform" type="rotate" repeatCount="indefinite" dur="1s" from="0 25 25" to="360 25 25"/>
+    </circle>
+  </svg>
+</span>
+        <span>${text}</span>
+    </div>
+`;
     document.body.appendChild(overlay);
 }
 
@@ -228,7 +230,7 @@ function hideOverlay() {
         const fields = await getDataFromBuffer();
         if (fields == null) {
             btn.disabled = true;
-            btn.innerText = "Нет данных для заполнения hola";
+            btn.innerText = "Нет данных для заполнения";
             btn.style = btn.style.cssText + styleDis;
         } else {
             btn.disabled = false;
@@ -241,7 +243,8 @@ function hideOverlay() {
         btn.disabled = true;
         btn.innerText = "Заполняется...";
         btn.style = btn.style.cssText + styleProcess;
-        showOverlay("Автозаполнение...");
+        showOverlay("Идёт автозаполнение формы. Пожалуйста, не кликайте, не используйте клавиатуру и не переходите в другие окна или вкладки до завершения.");
+
 
         (async () => {
             const fields = await getDataFromBuffer();
@@ -296,7 +299,7 @@ function hideOverlay() {
             btn.innerText = "Заполнить";
             hideOverlay();
         })();
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 50));
 
 
 
