@@ -228,7 +228,7 @@ function hideOverlay() {
         const fields = await getDataFromBuffer();
         if (fields == null) {
             btn.disabled = true;
-            btn.innerText = "Нет данных для заполнения ALLLLLOQ";
+            btn.innerText = "Нет данных для заполнения hola";
             btn.style = btn.style.cssText + styleDis;
         } else {
             btn.disabled = false;
