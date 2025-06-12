@@ -293,7 +293,7 @@ function hideOverlay() {
             }
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
-            btn.innerText = "Заполнить";
+            btn.innerText = "Заполнитdddь";
             hideOverlay();
         })();
         await new Promise(r => setTimeout(r, 200));
