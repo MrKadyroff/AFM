@@ -264,12 +264,38 @@ function hideOverlay() {
 (function () {
     'use strict';
 
+    const pulseStyle = document.createElement('style');
+    pulseStyle.innerHTML = `
+        .afm-pulse {
+        animation: afm-pulse-btn 1.3s infinite;
+        position: fixed;
+        left: 50%;
+        top: 10%;
+        transform: translate(-50%, 10px); /* по центру и на 10px ниже */
+        z-index: 9999;
+        }
+        @keyframes afm-pulse-btn {
+        0% { box-shadow: 0 0 0 0 #1976d280; }
+        70% { box-shadow: 0 0 0 12px #1976d200; }
+        100% { box-shadow: 0 0 0 0 #1976d200; }
+        }
+        `;
+    document.head.appendChild(pulseStyle);
+
     let btn = document.createElement("button");
     btn.innerText = "Заполнить";
-    btn.style = `position:fixed;top:60px;right:20px;z-index:9999;padding:10px 24px;font-size:18px;
-    border:none; border-radius:8px; background:#1976d2; color:#fff;
-    transition: background 0.2s;
-    cursor:pointer;`;
+    btn.className = "afm-pulse";
+    btn.style = `
+            padding: 14px 32px;
+            font-size: 18px;
+            border: none;
+            border-radius: 8px;
+            background: #1976d2;
+            color: #fff;
+            transition: background 0.2s;
+            cursor: pointer;
+        `;
+
     const styleActive = 'background:#1976d2;color:#fff;cursor:pointer;';
     const styleProcess = 'background:#ffa726;color:#222;cursor:wait;';
     const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
@@ -280,7 +306,7 @@ function hideOverlay() {
         const fields = await getDataFromBuffer();
         if (fields == null) {
             btn.disabled = true;
-            btn.innerText = "Нет данных для заполнения";
+            btn.innerText = "Нет данных. Нажмите кнопку АФМ в заявке.";
             btn.style = btn.style.cssText + styleDis;
         } else {
             btn.disabled = false;
@@ -304,7 +330,7 @@ function hideOverlay() {
                 btn.innerText = "Заполнить";
                 btn.style = btn.style.cssText + styleActive;
                 hideOverlay();
-                alert("Нет данных сделки");
+                alert("Нет данных. Нажмите кнопку АФМ в заявке.");
 
                 return;
 
