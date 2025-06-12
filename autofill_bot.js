@@ -261,6 +261,33 @@ function hideOverlay() {
     if (overlay) overlay.remove();
 }
 
+function waitForSaveButton(businessKey) {
+    const btn = document.querySelector('button[name="save"]');
+    if (btn) {
+        // Чтобы не было двойных обработчиков
+        if (!btn.hasAttribute('afm-listener')) {
+            btn.setAttribute('afm-listener', '1');
+            btn.addEventListener('click', async function () {
+                // Вызов GET API
+                try {
+                    const response = await fetch(`https://api-dev.quiq.kz/Application/afmStatus/${businessKey}/2`, {
+                        method: 'GET'
+                    });
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const data = await response.json(); // Или response.text() если не JSON
+                    // Здесь можешь делать что угодно с результатом
+                } catch (err) {
+                    console.error('Ошибка запроса:', err);
+                }
+            });
+        }
+    } else {
+        // Кнопка еще не появилась — проверим чуть позже
+        setTimeout(waitForSaveButton, 500);
+    }
+}
+
+
 (function () {
     'use strict';
 
@@ -315,6 +342,8 @@ function hideOverlay() {
         }
     }, 1500);
 
+
+
     btn.onclick = async () => {
         btn.disabled = true;
         btn.innerText = "Заполняется...";
@@ -325,6 +354,7 @@ function hideOverlay() {
         (async () => {
             const fields = await getDataFromBuffer();
             await new Promise(r => setTimeout(r, 100));
+            var businessKey = "";
             if (fields == null) {
                 btn.disabled = false;
                 btn.innerText = "Заполнить";
@@ -335,11 +365,15 @@ function hideOverlay() {
                 return;
 
             }
+
             await openAccordionByHeader("форма фм-1", ["form.operation_state", "form.operation_date"]);
             await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
             //await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
             await new Promise(r => setTimeout(r, 200));
             for (const field of fields) {
+                if (field.Name == "businessKey") {
+                    businessKey = field.Value;
+                }
                 if (field.Name == "operation.address.house_number") {
                     await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
                     await openAccordionByHeader("участник 1", ["participants[0].participant"]);
@@ -370,6 +404,7 @@ function hideOverlay() {
                     continue;
                 }
             }
+            waitForSaveButton(businessKey);
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
