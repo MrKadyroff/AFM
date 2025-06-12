@@ -228,11 +228,11 @@ function hideOverlay() {
         const fields = await getDataFromBuffer();
         if (fields == null) {
             btn.disabled = true;
-            btn.innerText = "Нет данных для заполнения";
+            btn.innerText = "Нет данных для заполнения1111";
             btn.style = btn.style.cssText + styleDis;
         } else {
             btn.disabled = false;
-            btn.innerText = "Заполнить";
+            btn.innerText = "Заполнить2222";
             btn.style = btn.style.cssText + styleActive;
         }
     }, 1500);
@@ -293,7 +293,7 @@ function hideOverlay() {
             }
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
-            btn.innerText = "Заполнитdddь";
+            btn.innerText = "Заполнить";
             hideOverlay();
         })();
         await new Promise(r => setTimeout(r, 200));
