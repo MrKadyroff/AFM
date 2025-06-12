@@ -228,11 +228,11 @@ function hideOverlay() {
         const fields = await getDataFromBuffer();
         if (fields == null) {
             btn.disabled = true;
-            btn.innerText = "Нет данных для заполнения1111";
+            btn.innerText = "Нет данных для заполнения ALLLLLOQ";
             btn.style = btn.style.cssText + styleDis;
         } else {
             btn.disabled = false;
-            btn.innerText = "Заполнить2222";
+            btn.innerText = "Заполнить";
             btn.style = btn.style.cssText + styleActive;
         }
     }, 1500);
