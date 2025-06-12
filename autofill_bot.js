@@ -47,29 +47,50 @@ async function realUserType(input, text, delay = 10) {
     input.focus();
 
     // Начало композиции (IME, как будто ввод с клавиатуры)
-    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.dispatchEvent(new CompositionEvent('compositionstart', {
+        bubbles: true
+    }));
 
     for (let i = 0; i < text.length; i++) {
         let char = text[i];
 
         // Keyboard events
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: char, code: char, bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keypress', { key: char, code: char, bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', {
+            key: char,
+            code: char,
+            bubbles: true
+        }));
+        input.dispatchEvent(new KeyboardEvent('keypress', {
+            key: char,
+            code: char,
+            bubbles: true
+        }));
 
         // Меняем value через prototype setter (чуть более "нативно", чем напрямую)
         let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
         nativeInputValueSetter.call(input, input.value + char);
 
         // Input event
-        input.dispatchEvent(new InputEvent('input', { data: char, inputType: 'insertText', bubbles: true }));
+        input.dispatchEvent(new InputEvent('input', {
+            data: char,
+            inputType: 'insertText',
+            bubbles: true
+        }));
 
-        input.dispatchEvent(new KeyboardEvent('keyup', { key: char, code: char, bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keyup', {
+            key: char,
+            code: char,
+            bubbles: true
+        }));
 
         await new Promise(r => setTimeout(r, delay));
     }
 
     // Завершение композиции (IME)
-    input.dispatchEvent(new CompositionEvent('compositionend', { data: text, bubbles: true }));
+    input.dispatchEvent(new CompositionEvent('compositionend', {
+        data: text,
+        bubbles: true
+    }));
 
     // Paste (на всякий, если слушают ClipboardEvent)
     let dt = new DataTransfer();
@@ -80,7 +101,9 @@ async function realUserType(input, text, delay = 10) {
     }));
 
     // Бросаем input "change" на всякий
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("change", {
+        bubbles: true
+    }));
 }
 
 
@@ -90,18 +113,26 @@ function setReactInputValue(el, value) {
     el.value = value;
     let tracker = el._valueTracker;
     if (tracker) tracker.setValue(lastValue);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("input", {
+        bubbles: true
+    }));
+    el.dispatchEvent(new Event("change", {
+        bubbles: true
+    }));
 }
 
 // Симуляция медленного набора
 async function typeTextSlowly(input, text, delay = 10) {
     input.focus();
     input.value = "";
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('input', {
+        bubbles: true
+    }));
     for (let char of text) {
         input.value += char;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('input', {
+            bubbles: true
+        }));
         await new Promise(r => setTimeout(r, delay));
     }
 }
@@ -156,7 +187,9 @@ function setReactCheckbox(name, checked = true) {
     const cb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
     if (cb) {
         if (cb.checked !== checked) cb.click();
-        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        cb.dispatchEvent(new Event('change', {
+            bubbles: true
+        }));
         return true;
     }
     return false;
@@ -171,17 +204,6 @@ async function getDataFromBuffer() {
         return null; // Чтобы не получить undefined
     }
 }
-// Добавь в JS после вставки overlay:
-const style = document.createElement('style');
-style.textContent = `
-  .afm-spinner svg {
-    animation: afm-spin 1s linear infinite;
-  }
-  @keyframes afm-spin {
-    100% { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(style);
 
 
 function showOverlay(text = "Загрузка...") {
@@ -205,9 +227,26 @@ function showOverlay(text = "Загрузка...") {
     pointer-events: all; /* <--- блокирует все клики */`;
     overlay.innerHTML = `
     <div style="padding: 32px 48px; background: #282c34; border-radius: 16px; box-shadow: 0 8px 40px #0007;">
-     <span class="afm-spinner" style="display:inline-block; margin-right:18px; vertical-align:middle;">
+   <span style="display:inline-block; margin-right:18px; vertical-align:middle;">
   <svg width="40" height="40" viewBox="0 0 50 50" style="vertical-align:middle;">
-    <circle cx="25" cy="25" r="20" stroke="#53e3a6" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <circle
+      cx="25"
+      cy="25"
+      r="20"
+      fill="none"
+      stroke="#53e3a6"
+      stroke-width="5"
+      stroke-linecap="round"
+      stroke-dasharray="90 60"
+      stroke-dashoffset="0">
+      <animateTransform
+        attributeName="transform"
+        type="rotate"
+        from="0 25 25"
+        to="360 25 25"
+        dur="1.2s"
+        repeatCount="indefinite"/>
+    </circle>
   </svg>
 </span>
 </span>
