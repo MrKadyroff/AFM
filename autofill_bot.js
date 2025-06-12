@@ -171,6 +171,18 @@ async function getDataFromBuffer() {
         return null; // Чтобы не получить undefined
     }
 }
+// Добавь в JS после вставки overlay:
+const style = document.createElement('style');
+style.textContent = `
+  .afm-spinner svg {
+    animation: afm-spin 1s linear infinite;
+  }
+  @keyframes afm-spin {
+    100% { transform: rotate(360deg); }
+  }
+`;
+document.head.appendChild(style);
+
 
 function showOverlay(text = "Загрузка...") {
     // Если уже есть — не добавляем второй раз
@@ -186,19 +198,18 @@ function showOverlay(text = "Загрузка...") {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 2rem;
+    font-size: 1rem;
     color: white;
     font-family: inherit;
     transition: opacity 0.2s;
     pointer-events: all; /* <--- блокирует все клики */`;
     overlay.innerHTML = `
     <div style="padding: 32px 48px; background: #282c34; border-radius: 16px; box-shadow: 0 8px 40px #0007;">
-      <span style="display:inline-block; margin-right:18px; vertical-align:middle;">
-  <svg style="vertical-align:middle;" width="40" height="40" viewBox="0 0 50 50">
-    <circle cx="25" cy="25" r="20" stroke="#53e3a6" stroke-width="5" fill="none" stroke-linecap="round">
-      <animateTransform attributeName="transform" type="rotate" repeatCount="indefinite" dur="1s" from="0 25 25" to="360 25 25"/>
-    </circle>
+     <span class="afm-spinner" style="display:inline-block; margin-right:18px; vertical-align:middle;">
+  <svg width="40" height="40" viewBox="0 0 50 50" style="vertical-align:middle;">
+    <circle cx="25" cy="25" r="20" stroke="#53e3a6" stroke-width="5" fill="none" stroke-linecap="round"/>
   </svg>
+</span>
 </span>
         <span>${text}</span>
     </div>
