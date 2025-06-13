@@ -260,6 +260,47 @@ function hideOverlay() {
     let overlay = document.getElementById("afm-loading-overlay");
     if (overlay) overlay.remove();
 }
+function showModal(message, onOk) {
+    // Если модалка уже открыта, не добавлять повторно
+    if (document.getElementById('afm-check-modal')) return;
+    // Стили для затемнения и центра
+    const style = `
+        #afm-check-modal-backdrop {
+            position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.3); z-index: 99999;
+            display:flex; align-items:center; justify-content:center;
+        }
+        #afm-check-modal {
+            background: #fff; border-radius: 12px; padding: 32px 36px; font-size: 1.2rem;
+            box-shadow: 0 8px 40px #0005; min-width:260px; text-align:center;
+        }
+        #afm-check-modal button {
+            margin-top: 22px; background:#1976d2; color:#fff; border:none; border-radius:6px; padding:10px 34px; font-size:1rem; cursor:pointer;
+            transition: background .2s;
+        }
+        #afm-check-modal button:hover { background:#0e57a1;}
+    `;
+    const styleTag = document.createElement('style');
+    styleTag.innerHTML = style;
+    document.head.appendChild(styleTag);
+
+    // Разметка модалки
+    const modal = document.createElement('div');
+    modal.id = 'afm-check-modal-backdrop';
+    modal.innerHTML = `
+        <div id="afm-check-modal">
+            <div>${message}</div>
+            <button id="afm-check-modal-ok">OK</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    // Закрытие по кнопке OK
+    document.getElementById('afm-check-modal-ok').onclick = function () {
+        modal.remove();
+        styleTag.remove();
+        if (typeof onOk === "function") onOk();
+    };
+}
 
 function waitForSaveButton(businessKey) {
     const btn = document.querySelector('button[name="save"]');
@@ -409,6 +450,8 @@ function waitForSaveButton(businessKey) {
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
             hideOverlay();
+
+            showModal("Проверьте корректность данных с заявки");
         })();
         await new Promise(r => setTimeout(r, 50));
 
