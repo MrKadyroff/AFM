@@ -450,13 +450,9 @@ function waitForSaveButton(businessKey) {
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
             hideOverlay();
-
             showModal("Проверьте корректность данных с заявки");
         })();
         await new Promise(r => setTimeout(r, 50));
-
-
-
     };
 
     document.body.appendChild(btn);
