@@ -311,7 +311,13 @@ function waitForSaveButton(businessKey) {
             btn.addEventListener('click', async function () {
                 // Вызов GET API
                 try {
-                    const response = await fetch(`https://api-dev.quiq.kz/Application/afmStatus/${businessKey}/2`, {
+                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
+                    const formNumber = formNumberInput ? formNumberInput.value : null;
+
+                    if (!formNumber) {
+                        console.warn("Не удалось получить номер формы (form.form_number)");
+                    }
+                    const response = await fetch(`https://api-dev.quiq.kz/Application/afmStatus/${businessKey}/2/${formNumber}`, {
                         method: 'GET'
                     });
                     if (!response.ok) throw new Error('Network response was not ok');
