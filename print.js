@@ -1,67 +1,64 @@
 // ==UserScript==
-// @name         AFM — авто-печать PDF 100 & 101 (XHR+fetch intercept + без UI)
+// @name         AFM — авто-печать PDF 100 & 101 (v1.5 popup sync)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Перехватывает /v1/fm1, кеширует form_number→PDF URL. Кнопка «📎 Печать 100&101» загружает PDF в blob-iframe и сразу печатает через iframe.print(), без лишних нажатий.
+// @version      1.5
+// @description  Перехватывает /v1/fm1, кеширует form_number→PDF URL. Кнопка «📎 Печать 100&101» открывает синхронно окна, загружает PDF и печатает без блокировок.
 // @match        https://websfm.kz/form-fm*
 // @grant        GM_xmlhttpRequest
-// @run-at       document-start
+// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
     'use strict';
+    const IDS = ['100', '101'], API = '/v1/fm1';
+    const cache = {};
+    const log = (...args) => console.log('[AFM]', ...args);
 
-    const IDS = ['100', '101'];
-    const API_PATH = '/v1/fm1';
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const log = (...a) => console.log('[AFM]', ...a);
+    // Интсепт fetch
+    (function () {
+        const orig = window.fetch; window.fetch = (inp, init) => {
+            const url = typeof inp === 'string' ? inp : inp.url;
+            return orig(inp, init).then(r => { if (r.ok && url.includes(API)) r.clone().json().then(j => j.results.forEach(it => { if (it.form_number && it.form_request_result) cache[it.form_number] = it.form_request_result; }), e => { }); return r; });
+        };
+    })();
+    // XHR
+    (function () { const oO = XMLHttpRequest.prototype.open, oS = XMLHttpRequest.prototype.send; XMLHttpRequest.prototype.open = function (m, u) { this._u = u; return oO.apply(this, arguments); }; XMLHttpRequest.prototype.send = function (b) { this.addEventListener('load', () => { if (this.status === 200 && this._u.includes(API)) { try { JSON.parse(this.responseText).results.forEach(it => { if (it.form_number && it.form_request_result) cache[it.form_number] = it.form_request_result; }); } catch { } } }); return oS.apply(this, arguments); }; })();
 
-    // Кэш URL
-    window.__pdfCache = {};
-
-    // Интерцепт fetch
-    (function () { const orig = window.fetch; window.fetch = function (input, init) { const url = typeof input === 'string' ? input : input.url; return orig(input, init).then(res => { if (res.ok && url.includes(API_PATH)) { res.clone().json().then(json => { (json.results || []).forEach(i => { if (i.form_number && i.form_request_result) window.__pdfCache[i.form_number] = i.form_request_result; }); log('fetch cache', Object.keys(window.__pdfCache)); }).catch(() => { }); } return res; }); }; })();
-
-    // Интерцепт XHR
-    (function () { const oO = XMLHttpRequest.prototype.open, oS = XMLHttpRequest.prototype.send; XMLHttpRequest.prototype.open = function (m, u) { this._url = u; return oO.apply(this, arguments); }; XMLHttpRequest.prototype.send = function (b) { this.addEventListener('load', () => { if (this.status === 200 && this._url.includes(API_PATH)) { try { const j = JSON.parse(this.responseText); (j.results || []).forEach(i => { if (i.form_number && i.form_request_result) window.__pdfCache[i.form_number] = i.form_request_result; }); log('XHR cache', Object.keys(window.__pdfCache)); } catch { } } }); return oS.apply(this, arguments); }; })();
-
-    // Печать через blob-iframe
-    function printPdf(url, id) {
-        log(`Loading PDF ${id}`);
-        GM_xmlhttpRequest({
-            method: 'GET', url, responseType: 'arraybuffer', onload(res) {
-                log(`Loaded PDF ${id}, bytes=${res.response.byteLength}`);
-                const blob = new Blob([res.response], { type: 'application/pdf' });
-                const blobUrl = URL.createObjectURL(blob);
-                // Создать iframe
-                const ifr = document.createElement('iframe');
-                Object.assign(ifr.style, { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', border: 'none', zIndex: 9999 });
-                ifr.src = blobUrl;
-                document.body.appendChild(ifr);
-                ifr.onload = async () => {
-                    log(`Printing ${id}`);
-                    try { ifr.contentWindow.print(); } catch (e) { log('print error', e); }
-                    await sleep(500);
-                    document.body.removeChild(ifr);
-                    URL.revokeObjectURL(blobUrl);
-                };
-            }, onerror(e) { log('GM XHR error', e); }
+    // Синхронное открытие и печать окон
+    function startPrint() {
+        log('Start printing');
+        IDS.forEach(id => {
+            const url = cache[id];
+            if (!url) { log(`No URL for ${id}`); return; }
+            // Синхронно открываем popup
+            const w = window.open('', `print_${id}`);
+            if (!w) { log('Popup blocked'); return; }
+            w.document.write(`<html><body style="margin:0;overflow:hidden"><embed id="pdfEmb" width="100%" height="100%" type="application/pdf"></body></html>`);
+            w.document.close();
+            // Загружаем PDF
+            GM_xmlhttpRequest({
+                method: 'GET', url, responseType: 'blob', onload(res) {
+                    const blobUrl = URL.createObjectURL(res.response);
+                    const emb = w.document.getElementById('pdfEmb');
+                    emb.src = blobUrl;
+                    // Ждём полной загрузки PDF, потом авто-печать
+                    emb.onload = () => {
+                        log(`Auto-printing ${id}`);
+                        setTimeout(() => {
+                            w.focus();
+                            w.print();
+                            setTimeout(() => {
+                                w.close();
+                                URL.revokeObjectURL(blobUrl);
+                                log(`Closed ${id}`);
+                            }, 2000); // 7 секунд на печать, потом закроется
+                        }, 600); // даём 600мс PDF встроиться (можно увеличить)
+                    };
+                }, onerror(e) { log('XHR error', e); }
+            });
         });
     }
-
-    // Основной запуск
-    async function start() {
-        log('Start');
-        for (const id of IDS) {
-            const url = window.__pdfCache[id];
-            if (!url) log(`No URL for ${id}`);
-            else printPdf(url, id);
-            await sleep(1500);
-        }
-        log('Done');
-    }
-
-    // Инжект кнопки
-    function inject() { if (document.getElementById('afm-print-btn')) return; const b = document.createElement('button'); b.id = 'afm-print-btn'; b.textContent = '📎 Печать 100 & 101'; Object.assign(b.style, { position: 'fixed', bottom: '20px', left: '20px', padding: '8px 12px', background: '#1976d2', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', zIndex: 9999 }); b.onclick = start; document.body.appendChild(b); log('Button injected'); }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject); else inject();
+    // Кнопка
+    function injectBtn() { if (document.getElementById('afm_print')) return; const b = document.createElement('button'); b.id = 'afm_print'; b.textContent = '📎 Печать 100&101'; Object.assign(b.style, { position: 'fixed', bottom: '20px', left: '20px', padding: '8px 12px', background: '#1976d2', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', zIndex: 9999 }); b.addEventListener('click', startPrint); document.body.appendChild(b); log('Button injected'); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectBtn); else injectBtn();
 })();
