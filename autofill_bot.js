@@ -20,28 +20,36 @@ async function waitForElement(selector, timeout = 200) {
 }
 
 // Открыть аккордеон по заголовку (если закрыт)
-async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 50) {
-    let p = Array.from(document.querySelectorAll('p'))
+async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 1500) {
+    // Найдём заголовок
+    const p = Array.from(document.querySelectorAll('p'))
         .find(e => e.textContent.trim().toLowerCase().includes(headerText.trim().toLowerCase()));
     if (!p) return false;
-    let headerDiv = p.closest('div');
+
+    // Поднимаемся до ближайшего clickable блока (например, div с role=button или cursor:pointer)
+    const headerDiv = p.closest('div');
     if (!headerDiv) return false;
 
-    // Клик только если закрыт (по стрелке вниз)
-    if (!headerDiv.parentElement?.innerHTML.includes('M10L12')) {
-        headerDiv.click();
-        await new Promise(r => setTimeout(r, 50));
-    }
+    // Проверим: вложенные expectedFields уже видны?
+    const someVisible = expectedFieldNames.some(name => document.querySelector(`[name="${name}"]`));
+    if (someVisible) return true; // уже открыт
 
-    // Ждем появления хотя бы одного поля (можно расширить на вложенные)
+    // Пробуем кликнуть, если поля не найдены
+    headerDiv.click();
+
+
+    // Ждём появления хотя бы одного ожидаемого поля
     const start = Date.now();
     while (Date.now() - start < timeout) {
-        let appeared = expectedFieldNames.some(name => document.querySelector(`[name="${name}"]`));
-        if (appeared) return true;
-        await new Promise(r => setTimeout(r, 50));
+        const ready = expectedFieldNames.some(name => document.querySelector(`[name="${name}"]`));
+        if (ready) return true;
+        await new Promise(r => setTimeout(r, 100));
     }
+
+    console.warn("⛔️ Аккордеон не раскрыл нужные поля:", headerText);
     return false;
 }
+
 
 async function realUserType(input, text, delay = 10) {
     input.focus();
@@ -164,15 +172,25 @@ async function selectDropdownUniversal(name, value) {
     const start = Date.now();
     while (Date.now() - start < 1000) {
         let opts = Array.from(document.querySelectorAll(`button[name="${name}"][type="button"]`));
+
+        // 1. Точное совпадение
         found = opts.find(btn => {
-            if (btn.dataset && btn.dataset.name) {
-                return btn.dataset.name.toLowerCase().includes(value.toLowerCase());
-            }
-            return btn.textContent.trim().toLowerCase().includes(value.toLowerCase());
+            const text = (btn.dataset?.name || btn.textContent || "").trim().toLowerCase();
+            return text === value.trim().toLowerCase();
         });
+
+        // 2. Если не нашли — частичное совпадение
+        if (!found) {
+            found = opts.find(btn => {
+                const text = (btn.dataset?.name || btn.textContent || "").trim().toLowerCase();
+                return text.includes(value.trim().toLowerCase());
+            });
+        }
+
         if (found) break;
         await new Promise(r => setTimeout(r, 50));
     }
+
     if (found) {
         found.click();
         await new Promise(r => setTimeout(r, 50));
@@ -181,6 +199,7 @@ async function selectDropdownUniversal(name, value) {
     }
     return false;
 }
+
 
 // Реакт-чекбокс
 function setReactCheckbox(name, checked = true) {
@@ -429,18 +448,32 @@ function waitForSaveButton(businessKey) {
                     await openAccordionByHeader("фактический адрес", ["participants[0].address.country"]);
 
                 }
-                if (field.Name == "participants[0].birthday") {
-                    await openAccordionByHeader("фио", ["participants[0].full_name.last_name"]);
-                    await openAccordionByHeader("документ, удостоверяющий личность", ["participants[0].document.type_document"]);
+                if (field.Name == "participants[0].iin") {
+                    await openAccordionByHeader("фио", ["participants[0].full_name.last_name", "participants[0].full_name.first_name"]);
+                    await openAccordionByHeader("документ, удостоверяющий личность", ["participants[0].document.type_document", "participants[0].document.number", "participants[0].document.issue_date"]);
                 }
 
-                if (field.FieldType == "input") {
-                    const el = document.querySelector(`[name="${field.Name}"]`);
-                    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
-                        setReactInputValue(el, field.Value);
-                        continue;
+                if (field.FieldType === "input") {
+                    let el = document.querySelector(`[name="${field.Name}"]`);
+
+                    // ДОЖДАТЬСЯ, если поле не найдено (например, datepicker отрисовывается после аккордеона)
+                    if (!el) {
+                        const start = Date.now();
+                        while (!el && Date.now() - start < 2000) {
+                            await new Promise(r => setTimeout(r, 100));
+                            el = document.querySelector(`[name="${field.Name}"]`);
+                        }
                     }
 
+                    // Если появилось — заполняем
+                    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+                        if (field.Name.toLowerCase().includes("date") || field.Name.toLowerCase().includes("issue")) {
+                            setReactInputValue(el, field.Value);
+                        } else {
+                            setReactInputValue(el, field.Value);
+                        }
+                        continue;
+                    }
                 }
                 if (field.FieldType == "select") {
                     await selectDropdownUniversal(field.Name, field.Value);

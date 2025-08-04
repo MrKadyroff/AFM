@@ -1,0 +1,20 @@
+{
+    "manifest_version": 3,
+    "name": "AFM Автопечать PDF 100&101",
+    "version": "1.0",
+    "description": "Кнопка для печати PDF форм 100 и 101 на websfm.kz",
+    "permissions": [],
+    "host_permissions": [
+        "https://websfm.kz/form-fm"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://websfm.kz/form-fm"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ]
+}
