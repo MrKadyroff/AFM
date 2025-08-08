@@ -353,6 +353,41 @@ function waitForSaveButton(businessKey) {
     }
 }
 
+function waitForSubscribeButton(businessKey) {
+    const btn = document.querySelector('button[name="subscribe"]');
+    if (btn) {
+        // Чтобы не было двойных обработчиков
+        if (!btn.hasAttribute('afm-listener')) {
+            btn.setAttribute('afm-listener', '1');
+            btn.addEventListener('click', async function () {
+                // Вызов GET API
+                try {
+                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
+                    const formNumber = formNumberInput ? formNumberInput.value : null;
+
+                    if (!formNumber) {
+                        console.warn("Не удалось получить номер формы (form.form_number)");
+                    }
+                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus/${businessKey}/3/${formNumber}`, {
+                        method: 'GET'
+                    });
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const data = await response.json(); // Или response.text() если не JSON
+                    // Здесь можешь делать что угодно с результатом
+                } catch (err) {
+                    console.error('Ошибка запроса:', err);
+                }
+            });
+        }
+    } else {
+        // Кнопка еще не появилась — проверим чуть позже
+        setTimeout(waitForSaveButton, 500);
+        setTimeout(waitForSubscribeButton, 500);
+    }
+}
+
+
+
 
 (function () {
     'use strict';
@@ -485,6 +520,7 @@ function waitForSaveButton(businessKey) {
                 }
             }
             waitForSaveButton(businessKey);
+            waitForSubscribeButton(businessKey);
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
