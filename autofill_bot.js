@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AFM
+// @name         AFM sef
 // @namespace    http://tampermonkey.net/
 // @version      1.2
 // @description  Заполняет форму AFM корректно для React-порталов, стабильно!
@@ -130,7 +130,7 @@ function setReactInputValue(el, value) {
 }
 
 // Симуляция медленного набора
-async function typeTextSlowly(input, text, delay = 10) {
+async function typeTextSlowly(input, text, delay = 5) {
     input.focus();
     input.value = "";
     input.dispatchEvent(new Event('input', {
@@ -213,7 +213,6 @@ function setReactCheckbox(name, checked = true) {
     }
     return false;
 }
-
 async function getDataFromBuffer() {
     try {
         const clipboardText = await navigator.clipboard.readText();
@@ -320,6 +319,52 @@ function showModal(message, onOk) {
         if (typeof onOk === "function") onOk();
     };
 }
+
+function waitForSaveButton(businessKey, initiator) {
+    console.log("intin", initiator);
+    const btn = document.querySelector('button[name="save"]');
+    if (btn) {
+        // Чтобы не было двойных обработчиков
+        if (!btn.hasAttribute('afm-listener')) {
+            btn.setAttribute('afm-listener', '1');
+            btn.addEventListener('click', async function () {
+                // Вызов GET API
+                try {
+                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
+                    const formNumber = formNumberInput ? formNumberInput.value : null;
+
+                    if (!formNumber) {
+                        console.warn("Не удалось получить номер формы (form.form_number)");
+                    }
+                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            requestId: businessKey,
+                            afmId: formNumber,
+                            savedByUser: initiator,
+                            subscribedByUser: "",
+                            saveUserIp: "",
+                            subscribeUserIp: "",
+                            status: 2
+                        })
+                    });
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const data = await response.json(); // Или response.text() если не JSON
+                    // Здесь можешь делать что угодно с результатом
+                } catch (err) {
+                    console.error('Ошибка запроса:', err);
+                }
+            });
+        }
+    } else {
+        // Кнопка еще не появилась — проверим чуть позже
+        setTimeout(waitForSaveButton, 500);
+    }
+}
+
 function waitForSubscribeButton(businessKey, initiator) {
     const btn = document.querySelector('button[name="subscribe"]');
     if (btn) {
@@ -349,71 +394,6 @@ function waitForSubscribeButton(businessKey, initiator) {
                             subscribeUserIp: "",
                             status: 3
                         })
-                    });
-                    if (!response.ok) throw new Error('Network response was not ok');
-                    const data = await response.json(); // Или response.text() если не JSON
-                    // Здесь можешь делать что угодно с результатом
-                } catch (err) {
-                    console.error('Ошибка запроса:', err);
-                }
-            });
-        }
-    } else {
-        // Кнопка еще не появилась — проверим чуть позже
-        setTimeout(waitForSaveButton, 500);
-        setTimeout(waitForSubscribeButton, 500);
-    }
-}
-
-function waitForSaveButton(businessKey) {
-    const btn = document.querySelector('button[name="save"]');
-    if (btn) {
-        // Чтобы не было двойных обработчиков
-        if (!btn.hasAttribute('afm-listener')) {
-            btn.setAttribute('afm-listener', '1');
-            btn.addEventListener('click', async function () {
-                // Вызов GET API
-                try {
-                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
-                    const formNumber = formNumberInput ? formNumberInput.value : null;
-
-                    if (!formNumber) {
-                        console.warn("Не удалось получить номер формы (form.form_number)");
-                    }
-                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus/${businessKey}/2/${formNumber}`, {
-                        method: 'GET'
-                    });
-                    if (!response.ok) throw new Error('Network response was not ok');
-                    const data = await response.json(); // Или response.text() если не JSON
-                    // Здесь можешь делать что угодно с результатом
-                } catch (err) {
-                    console.error('Ошибка запроса:', err);
-                }
-            });
-        }
-    } else {
-        // Кнопка еще не появилась — проверим чуть позже
-        setTimeout(waitForSaveButton, 500);
-    }
-}
-
-function waitForSubscribeButton(businessKey) {
-    const btn = document.querySelector('button[name="subscribe"]');
-    if (btn) {
-        // Чтобы не было двойных обработчиков
-        if (!btn.hasAttribute('afm-listener')) {
-            btn.setAttribute('afm-listener', '1');
-            btn.addEventListener('click', async function () {
-                // Вызов GET API
-                try {
-                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
-                    const formNumber = formNumberInput ? formNumberInput.value : null;
-
-                    if (!formNumber) {
-                        console.warn("Не удалось получить номер формы (form.form_number)");
-                    }
-                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus/${businessKey}/3/${formNumber}`, {
-                        method: 'GET'
                     });
                     if (!response.ok) throw new Error('Network response was not ok');
                     const data = await response.json(); // Или response.text() если не JSON
@@ -500,7 +480,9 @@ function waitForSubscribeButton(businessKey) {
             const fields = await getDataFromBuffer();
             await new Promise(r => setTimeout(r, 100));
             var businessKey = "";
-            if (fields == null) {
+            var initiator = "";
+            if (fields?.json == null) {
+                initiator = fields.initiator;
                 btn.disabled = false;
                 btn.innerText = "Заполнить";
                 btn.style = btn.style.cssText + styleActive;
@@ -515,7 +497,8 @@ function waitForSubscribeButton(businessKey) {
             await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
             //await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
             await new Promise(r => setTimeout(r, 200));
-            for (const field of fields) {
+            initiator = fields.initiator;
+            for (const field of fields.json) {
                 if (field.Name == "businessKey") {
                     businessKey = field.Value;
                 }
@@ -563,9 +546,8 @@ function waitForSubscribeButton(businessKey) {
                     continue;
                 }
             }
-            waitForSaveButton(businessKey);
+            waitForSaveButton(businessKey, initiator);
             waitForSubscribeButton(businessKey, initiator);
-            waitForSubscribeButton(businessKey);
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
