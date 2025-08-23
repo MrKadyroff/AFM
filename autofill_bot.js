@@ -1,12 +1,18 @@
 // ==UserScript==
 // @name         AFM sef
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Заполняет форму AFM корректно для React-порталов, стабильно!
+// @version      1.3
+// @description  Заполняет форму AFM корректно для React-порталов, стабильно! + ранний мониторинг кнопок
 // @author       Ecash
 // @match        https://websfm.kz/form-fm/*
 // @grant        none
 // ==/UserScript==
+
+// === [0] Глобальное состояние для актуальных значений ===
+const AFM_STATE = {
+    businessKey: "",
+    initiator: ""
+};
 
 // Универсальное ожидание элемента
 async function waitForElement(selector, timeout = 200) {
@@ -37,7 +43,6 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     // Пробуем кликнуть, если поля не найдены
     headerDiv.click();
 
-
     // Ждём появления хотя бы одного ожидаемого поля
     const start = Date.now();
     while (Date.now() - start < timeout) {
@@ -50,70 +55,41 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     return false;
 }
 
-
 async function realUserType(input, text, delay = 10) {
     input.focus();
 
-    // Начало композиции (IME, как будто ввод с клавиатуры)
-    input.dispatchEvent(new CompositionEvent('compositionstart', {
-        bubbles: true
-    }));
+    // Начало композиции (IME)
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
 
     for (let i = 0; i < text.length; i++) {
         let char = text[i];
 
         // Keyboard events
-        input.dispatchEvent(new KeyboardEvent('keydown', {
-            key: char,
-            code: char,
-            bubbles: true
-        }));
-        input.dispatchEvent(new KeyboardEvent('keypress', {
-            key: char,
-            code: char,
-            bubbles: true
-        }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: char, code: char, bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keypress', { key: char, code: char, bubbles: true }));
 
-        // Меняем value через prototype setter (чуть более "нативно", чем напрямую)
+        // Меняем value через prototype setter
         let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
         nativeInputValueSetter.call(input, input.value + char);
 
         // Input event
-        input.dispatchEvent(new InputEvent('input', {
-            data: char,
-            inputType: 'insertText',
-            bubbles: true
-        }));
-
-        input.dispatchEvent(new KeyboardEvent('keyup', {
-            key: char,
-            code: char,
-            bubbles: true
-        }));
+        input.dispatchEvent(new InputEvent('input', { data: char, inputType: 'insertText', bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { key: char, code: char, bubbles: true }));
 
         await new Promise(r => setTimeout(r, delay));
     }
 
     // Завершение композиции (IME)
-    input.dispatchEvent(new CompositionEvent('compositionend', {
-        data: text,
-        bubbles: true
-    }));
+    input.dispatchEvent(new CompositionEvent('compositionend', { data: text, bubbles: true }));
 
-    // Paste (на всякий, если слушают ClipboardEvent)
+    // Имитация paste (если слушают ClipboardEvent)
     let dt = new DataTransfer();
     dt.setData("text/plain", text);
-    input.dispatchEvent(new ClipboardEvent("paste", {
-        clipboardData: dt,
-        bubbles: true
-    }));
+    input.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
 
-    // Бросаем input "change" на всякий
-    input.dispatchEvent(new Event("change", {
-        bubbles: true
-    }));
+    // "change" на всякий
+    input.dispatchEvent(new Event("change", { bubbles: true }));
 }
-
 
 // Реакт-инпут, работает всегда
 function setReactInputValue(el, value) {
@@ -121,26 +97,18 @@ function setReactInputValue(el, value) {
     el.value = value;
     let tracker = el._valueTracker;
     if (tracker) tracker.setValue(lastValue);
-    el.dispatchEvent(new Event("input", {
-        bubbles: true
-    }));
-    el.dispatchEvent(new Event("change", {
-        bubbles: true
-    }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 // Симуляция медленного набора
 async function typeTextSlowly(input, text, delay = 5) {
     input.focus();
     input.value = "";
-    input.dispatchEvent(new Event('input', {
-        bubbles: true
-    }));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     for (let char of text) {
         input.value += char;
-        input.dispatchEvent(new Event('input', {
-            bubbles: true
-        }));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
         await new Promise(r => setTimeout(r, delay));
     }
 }
@@ -179,7 +147,7 @@ async function selectDropdownUniversal(name, value) {
             return text === value.trim().toLowerCase();
         });
 
-        // 2. Если не нашли — частичное совпадение
+        // 2. Частичное совпадение
         if (!found) {
             found = opts.find(btn => {
                 const text = (btn.dataset?.name || btn.textContent || "").trim().toLowerCase();
@@ -200,30 +168,38 @@ async function selectDropdownUniversal(name, value) {
     return false;
 }
 
-
 // Реакт-чекбокс
 function setReactCheckbox(name, checked = true) {
     const cb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
     if (cb) {
         if (cb.checked !== checked) cb.click();
-        cb.dispatchEvent(new Event('change', {
-            bubbles: true
-        }));
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
     }
     return false;
 }
+
+// === [1] Обновление состояния из буфера (инициатор/бизнес-ключ) ===
 async function getDataFromBuffer() {
     try {
         const clipboardText = await navigator.clipboard.readText();
         const fields = JSON.parse(clipboardText);
+
+        // поддерживаем актуальность глобального состояния
+        if (fields?.initiator) AFM_STATE.initiator = fields.initiator;
+
+        if (fields?.json && Array.isArray(fields.json)) {
+            const bk = fields.json.find(f => f.Name === "businessKey")?.Value;
+            if (bk) AFM_STATE.businessKey = bk;
+        }
+
         return fields;
     } catch (err) {
         return null; // Чтобы не получить undefined
     }
 }
 
-
+// === [2] UI: затемняющий оверлей ===
 function showOverlay(text = "Загрузка...") {
     // Если уже есть — не добавляем второй раз
     if (document.getElementById("afm-loading-overlay")) return;
@@ -278,6 +254,8 @@ function hideOverlay() {
     let overlay = document.getElementById("afm-loading-overlay");
     if (overlay) overlay.remove();
 }
+
+// === [3] Простая модалка-подтверждение ===
 function showModal(message, onOk) {
     // Если модалка уже открыта, не добавлять повторно
     if (document.getElementById('afm-check-modal')) return;
@@ -320,99 +298,59 @@ function showModal(message, onOk) {
     };
 }
 
-function waitForSaveButton(businessKey, initiator) {
-    console.log("intin", initiator);
-    const btn = document.querySelector('button[name="save"]');
-    if (btn) {
-        // Чтобы не было двойных обработчиков
-        if (!btn.hasAttribute('afm-listener')) {
-            btn.setAttribute('afm-listener', '1');
-            btn.addEventListener('click', async function () {
-                // Вызов GET API
-                try {
-                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
-                    const formNumber = formNumberInput ? formNumberInput.value : null;
-
-                    if (!formNumber) {
-                        console.warn("Не удалось получить номер формы (form.form_number)");
-                    }
-                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            requestId: businessKey,
-                            afmId: formNumber,
-                            savedByUser: initiator,
-                            subscribedByUser: "",
-                            saveUserIp: "",
-                            subscribeUserIp: "",
-                            status: 2
-                        })
-                    });
-                    if (!response.ok) throw new Error('Network response was not ok');
-                    const data = await response.json(); // Или response.text() если не JSON
-                    // Здесь можешь делать что угодно с результатом
-                } catch (err) {
-                    console.error('Ошибка запроса:', err);
-                }
-            });
+// === [4] Универсальная привязка обработчика к кнопке (save/subscribe) ===
+// handlerStatus = 2 для save, 3 для subscribe
+function waitAndBindActionButton({ buttonName, statusValue }) {
+    const tryBind = () => {
+        const btn = document.querySelector(`button[name="${buttonName}"]`);
+        if (!btn) {
+            // кнопка ещё не дорисована — проверим чуть позже
+            setTimeout(tryBind, 500);
+            return;
         }
-    } else {
-        // Кнопка еще не появилась — проверим чуть позже
-        setTimeout(waitForSaveButton, 500);
-    }
+        if (btn.hasAttribute('afm-listener')) return; // уже повесили
+
+        btn.setAttribute('afm-listener', '1');
+        btn.addEventListener('click', async () => {
+            // Обновим state на случай, если пользователь переключал заявки
+            await getDataFromBuffer();
+
+            // Попробуем взять номер формы из DOM
+            const formNumberInput = document.querySelector('input[name="form.form_number"]');
+            const formNumber = formNumberInput ? formNumberInput.value : null;
+
+            const payload = {
+                requestId: AFM_STATE.businessKey || "",
+                afmId: formNumber || "",
+                savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
+                subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
+                saveUserIp: "",
+                subscribeUserIp: "",
+                status: statusValue
+            };
+
+            try {
+                const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) throw new Error('Network response was not ok');
+                // const data = await response.json();
+            } catch (err) {
+                console.error('Ошибка запроса:', err);
+            }
+        });
+    };
+
+    tryBind();
 }
 
-function waitForSubscribeButton(businessKey, initiator) {
-    const btn = document.querySelector('button[name="subscribe"]');
-    if (btn) {
-        // Чтобы не было двойных обработчиков
-        if (!btn.hasAttribute('afm-listener')) {
-            btn.setAttribute('afm-listener', '1');
-            btn.addEventListener('click', async function () {
-                // Вызов GET API
-                try {
-                    const formNumberInput = document.querySelector('input[name="form.form_number"]');
-                    const formNumber = formNumberInput ? formNumberInput.value : null;
+// Обёртки для обратной совместимости
+function waitForSaveButton() { waitAndBindActionButton({ buttonName: 'save', statusValue: 2 }); }
+function waitForSubscribeButton() { waitAndBindActionButton({ buttonName: 'subscribe', statusValue: 3 }); }
 
-                    if (!formNumber) {
-                        console.warn("Не удалось получить номер формы (form.form_number)");
-                    }
-                    const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            requestId: businessKey,
-                            afmId: formNumber,
-                            savedByUser: "",
-                            subscribedByUser: initiator,
-                            saveUserIp: "",
-                            subscribeUserIp: "",
-                            status: 3
-                        })
-                    });
-                    if (!response.ok) throw new Error('Network response was not ok');
-                    const data = await response.json(); // Или response.text() если не JSON
-                    // Здесь можешь делать что угодно с результатом
-                } catch (err) {
-                    console.error('Ошибка запроса:', err);
-                }
-            });
-        }
-    } else {
-        // Кнопка еще не появилась — проверим чуть позже
-        setTimeout(waitForSaveButton, 500);
-        setTimeout(waitForSubscribeButton, 500);
-    }
-}
-
-
-
-
+// === [5] Главный запуск ===
 (function () {
     'use strict';
 
@@ -453,9 +391,13 @@ function waitForSubscribeButton(businessKey, initiator) {
     const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
     const styleDis = 'background:#ec4141;color:#fff;cursor:pointer;';
 
+    // 🔥 слушаем кнопки сразу (без зависимости от автозаполнения)
+    waitForSaveButton();
+    waitForSubscribeButton();
 
+    // Периодически тянем буфер и обновляем состояние/надпись
     setInterval(async () => {
-        const fields = await getDataFromBuffer();
+        const fields = await getDataFromBuffer(); // обновляет AFM_STATE
         if (fields == null) {
             btn.disabled = true;
             btn.innerText = "Нет данных. Нажмите кнопку АФМ в заявке.";
@@ -467,48 +409,47 @@ function waitForSubscribeButton(businessKey, initiator) {
         }
     }, 1500);
 
-
-
     btn.onclick = async () => {
         btn.disabled = true;
         btn.innerText = "Заполняется...";
         btn.style = btn.style.cssText + styleProcess;
         showOverlay("Идёт автозаполнение формы. Пожалуйста, не кликайте, не используйте клавиатуру и не переходите в другие окна или вкладки до завершения.");
 
-
         (async () => {
-            const fields = await getDataFromBuffer();
+            const fields = await getDataFromBuffer(); // также актуализирует AFM_STATE
             await new Promise(r => setTimeout(r, 100));
             var businessKey = "";
             var initiator = "";
+
             if (fields?.json == null) {
-                initiator = fields.initiator;
+                initiator = fields?.initiator || "";
                 btn.disabled = false;
                 btn.innerText = "Заполнить";
                 btn.style = btn.style.cssText + styleActive;
                 hideOverlay();
                 alert("Нет данных. Нажмите кнопку АФМ в заявке.");
-
                 return;
-
             }
 
             await openAccordionByHeader("форма фм-1", ["form.operation_state", "form.operation_date"]);
             await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
-            //await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
             await new Promise(r => setTimeout(r, 200));
-            initiator = fields.initiator;
+
+            initiator = fields.initiator || "";
+            const maybeBK = fields.json.find(f => f.Name === "businessKey")?.Value;
+            if (maybeBK) {
+                businessKey = maybeBK;
+                AFM_STATE.businessKey = maybeBK; // фиксируем в state
+            }
+            if (initiator) AFM_STATE.initiator = initiator;
+
             for (const field of fields.json) {
-                if (field.Name == "businessKey") {
-                    businessKey = field.Value;
-                }
                 if (field.Name == "operation.address.house_number") {
                     await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
                     await openAccordionByHeader("участник 1", ["participants[0].participant"]);
                     await openAccordionByHeader("банк участника операции", ["participants[0].bank.country"]);
                     await openAccordionByHeader("юридический адрес", ["participants[0].legal_address.country"]);
                     await openAccordionByHeader("фактический адрес", ["participants[0].address.country"]);
-
                 }
                 if (field.Name == "participants[0].iin") {
                     await openAccordionByHeader("фио", ["participants[0].full_name.last_name", "participants[0].full_name.first_name"]);
@@ -518,7 +459,7 @@ function waitForSubscribeButton(businessKey, initiator) {
                 if (field.FieldType === "input") {
                     let el = document.querySelector(`[name="${field.Name}"]`);
 
-                    // ДОЖДАТЬСЯ, если поле не найдено (например, datepicker отрисовывается после аккордеона)
+                    // ДОЖДАТЬСЯ, если поле не найдено
                     if (!el) {
                         const start = Date.now();
                         while (!el && Date.now() - start < 2000) {
@@ -529,11 +470,7 @@ function waitForSubscribeButton(businessKey, initiator) {
 
                     // Если появилось — заполняем
                     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
-                        if (field.Name.toLowerCase().includes("date") || field.Name.toLowerCase().includes("issue")) {
-                            setReactInputValue(el, field.Value);
-                        } else {
-                            setReactInputValue(el, field.Value);
-                        }
+                        setReactInputValue(el, field.Value);
                         continue;
                     }
                 }
@@ -546,14 +483,15 @@ function waitForSubscribeButton(businessKey, initiator) {
                     continue;
                 }
             }
-            waitForSaveButton(businessKey, initiator);
-            waitForSubscribeButton(businessKey, initiator);
+
+            // слушатели уже были навешаны заранее — ничего больше делать не нужно
             btn.disabled = false;
             btn.style = btn.style.cssText + styleDone;
             btn.innerText = "Заполнить";
             hideOverlay();
             showModal("Проверьте корректность данных с заявки");
         })();
+
         await new Promise(r => setTimeout(r, 50));
     };
 
