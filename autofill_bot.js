@@ -270,7 +270,7 @@ function bindActionButtonOnce(btn, statusValue) {
         };
 
         try {
-            const response = await fetch(`https://api-dev.quiq.kz/Application/afmStatus`, {
+            const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
