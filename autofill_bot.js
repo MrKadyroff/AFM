@@ -167,10 +167,19 @@ async function getDataFromBuffer() {
 }
 
 // AfmDocId = form.form_number (disabled, но .value читается)
-function getAfmDocId() {
-    const el = document.querySelector('input[name="form.form_number"]');
+async function getAfmDocId() {
+    // Сначала пытаемся сразу
+    let el = document.querySelector('input[name="form.form_number"]');
+    if (!el || !el.value?.trim()) {
+
+        await openAccordionByHeader("форма фм-1", ["form.form_number"]);
+        // Даём UI дорисоваться
+        await new Promise(r => setTimeout(r, 100));
+        el = document.querySelector('input[name="form.form_number"]');
+    }
     return el && typeof el.value !== 'undefined' ? String(el.value).trim() : "";
 }
+
 
 /* =========================
    [3] UI: overlay и modal
@@ -248,8 +257,9 @@ function bindActionButtonOnce(btn, statusValue) {
         // Обновим state на случай переключения заявок
         await getDataFromBuffer().catch(() => { });
 
-        const afmDocId = getAfmDocId(); // берём прямо из DOM (disabled допускается)
+        const afmDocId = await getAfmDocId();
         const payload = {
+            requestId: AFM_STATE.businessKey || "",
             AfmDocId: afmDocId || "",  // новое поле
             afmId: afmDocId || "",  // оставим для совместимости
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
@@ -260,7 +270,7 @@ function bindActionButtonOnce(btn, statusValue) {
         };
 
         try {
-            const response = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
+            const response = await fetch(`https://api-dev.quiq.kz/Application/afmStatus`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
