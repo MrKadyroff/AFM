@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AFM
+// @name         AFM sef
 // @namespace    http://tampermonkey.net/
 // @version      1.6.3
 // @description  Автозаполнение AFM через буфер. Многопроходная заливка, блокировка взаимодействия, лёгкий кометик-анимация. Мониторинг Сохранить/Подписать. AfmDocId из form.form_number.
@@ -8,8 +8,14 @@
 // @grant        none
 // ==/UserScript==
 
+/* =========================
+   [0] Глобальное состояние
+   ========================= */
 const AFM_STATE = { businessKey: "", initiator: "" };
 
+/* =========================
+   [1] Хелперы DOM/React
+   ========================= */
 async function waitForElement(selector, timeout = 200) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
@@ -297,8 +303,58 @@ function unlockInteraction() {
    [3.6] Маскот "кометик"
    ========================= */
 function ensureMascotStyles() {
-    if (document.getElementById("afm-mascot-style")) return;
-    const css = document.createElement("style");
+    // Если стили уже были, аккуратно ДОБАВИМ новые правила для надписи.
+    const extraCSS = `
+    /* Надпись ecash */
+    #afm-mascot .label {
+      position: absolute;
+      left: 8vw; bottom: 12vh;      /* можно поменять позицию, если нужно */
+      pointer-events: none;
+      font-weight: 800;
+      letter-spacing: .08em;
+      display: inline-flex;
+      gap: .06em;
+      user-select: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      filter: drop-shadow(0 2px 8px rgba(0,0,0,.35));
+    }
+    #afm-mascot .label .letter {
+      display: inline-block;
+      transform-origin: 50% 65%;
+      animation: afm-letter-pop 1.2s ease-in-out infinite;
+      will-change: transform, filter;
+      color: #f15a25;                     /* ваш фирменный оранжевый */
+      text-shadow: 0 0 12px rgba(241,90,37,.35);
+      font-size: clamp(18px, 3.2vw, 36px); /* адаптивный размер */
+      line-height: 1;
+    }
+    /* Поочерёдная задержка — е, c, a, s, h */
+    #afm-mascot .label .letter:nth-child(1) { animation-delay: 0.00s; }
+    #afm-mascot .label .letter:nth-child(2) { animation-delay: 0.12s; }
+    #afm-mascot .label .letter:nth-child(3) { animation-delay: 0.24s; }
+    #afm-mascot .label .letter:nth-child(4) { animation-delay: 0.36s; }
+    #afm-mascot .label .letter:nth-child(5) { animation-delay: 0.48s; }
+
+    @keyframes afm-letter-pop {
+      0%   { transform: scale(1);     filter: brightness(1); }
+      30%  { transform: scale(1.24);  filter: brightness(1.1); }
+      60%  { transform: scale(1.00);  filter: brightness(1); }
+      100% { transform: scale(1.00);  filter: brightness(1); }
+    }
+  `;
+
+    let css = document.getElementById("afm-mascot-style");
+    if (css) {
+        // Уже есть базовые стили кометы — просто добавим блок для надписи.
+        if (!css.textContent.includes('@keyframes afm-letter-pop')) {
+            css.textContent += extraCSS;
+        }
+        return;
+    }
+
+    // Если стилевого блока ещё нет — создаём полный набор (включая ваши базовые стили)
+    css = document.createElement("style");
     css.id = "afm-mascot-style";
     css.textContent = `
     #afm-mascot {
@@ -306,9 +362,7 @@ function ensureMascotStyles() {
       width: 100vw; height: 100vh; overflow: visible;
     }
     #afm-mascot .mx, #afm-mascot .my { position: absolute; inset: 0; }
-    /* Горизонталь туда-сюда */
     #afm-mascot .mx { animation: afm-move-x 6s ease-in-out infinite alternate; }
-    /* Вертикаль с другой частотой — получается "змейка" */
     #afm-mascot .my { animation: afm-move-y 4.2s ease-in-out infinite alternate; }
     @keyframes afm-move-x {
       0% { transform: translateX(-8vw); }
@@ -318,7 +372,6 @@ function ensureMascotStyles() {
       0% { transform: translateY(18vh); }
       100% { transform: translateY(72vh); }
     }
-    /* Сам спрайт */
     #afm-mascot .sprite {
       width: 42px; height: 42px; position: absolute; left: 0; top: 0;
       transform: translateZ(0); will-change: transform;
@@ -329,7 +382,6 @@ function ensureMascotStyles() {
       0% { transform: rotate(-8deg) scale(1); }
       100% { transform: rotate(8deg) scale(1.02); }
     }
-    /* Хвост — мягкий градиент и "искры" */
     #afm-mascot .trail {
       position: absolute; right: 34px; top: 50%; width: 80px; height: 8px;
       transform: translateY(-50%);
@@ -352,53 +404,80 @@ function ensureMascotStyles() {
       0% { transform: translateY(-50%) scale(.9); opacity: .75; }
       100% { transform: translateY(-50%) scale(1.1); opacity: 1; }
     }
-    /* SVG-комета: градиентное тело + "клюв" */
     #afm-mascot svg { width: 42px; height: 42px; display: block; }
     @media (max-width: 1024px) {
       #afm-mascot .sprite { width: 34px; height: 34px; }
       #afm-mascot svg { width: 34px; height: 34px; }
       #afm-mascot .trail { width: 66px; right: 26px; }
     }
+    ${extraCSS}
   `;
     document.head.appendChild(css);
 }
 
 function showMascot() {
-    if (document.getElementById("afm-mascot")) return;
     ensureMascotStyles();
-    const host = document.createElement("div");
-    host.id = "afm-mascot";
-    host.innerHTML = `
-    <div class="mx">
-      <div class="my">
-        <div class="sprite">
-          <div class="trail"></div>
-          <div class="spark"></div>
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <defs>
-              <radialGradient id="g1" cx="45%" cy="35%" r="70%">
-                <stop offset="0%" stop-color="#fff59d"/>
-                <stop offset="60%" stop-color="#ffe082"/>
-                <stop offset="100%" stop-color="#ffca28"/>
-              </radialGradient>
-              <linearGradient id="g2" x1="0" x2="1" y1="0" y2="1">
-                <stop offset="0%" stop-color="#42a5f5"/>
-                <stop offset="100%" stop-color="#1e88e5"/>
-              </linearGradient>
-            </defs>
-            <!-- тело кометы -->
-            <circle cx="36" cy="32" r="14" fill="url(#g1)"/>
-            <!-- "клюв"/нос -->
-            <path d="M22 30 L36 32 L22 34 Z" fill="url(#g2)" opacity=".95"/>
-            <!-- блик -->
-            <circle cx="41" cy="27" r="3" fill="#ffffff" opacity=".85"/>
-          </svg>
+
+    // Если хост уже есть — только добавим надпись при необходимости
+    let host = document.getElementById("afm-mascot");
+    if (!host) {
+        host = document.createElement("div");
+        host.id = "afm-mascot";
+        host.innerHTML = `
+      <div class="mx">
+        <div class="my">
+          <div class="sprite">
+            <div class="trail"></div>
+            <div class="spark"></div>
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <defs>
+                <radialGradient id="g1" cx="45%" cy="35%" r="70%">
+                  <stop offset="0%" stop-color="#fff59d"/>
+                  <stop offset="60%" stop-color="#ffe082"/>
+                  <stop offset="100%" stop-color="#ffca28"/>
+                </radialGradient>
+                <linearGradient id="g2" x1="0" x2="1" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#42a5f5"/>
+                  <stop offset="100%" stop-color="#1e88e5"/>
+                </linearGradient>
+              </defs>
+              <circle cx="36" cy="32" r="14" fill="url(#g1)"/>
+              <path d="M22 30 L36 32 L22 34 Z" fill="url(#g2)" opacity=".95"/>
+              <circle cx="41" cy="27" r="3" fill="#ffffff" opacity=".85"/>
+            </svg>
+          </div>
         </div>
       </div>
-    </div>
-  `;
-    document.body.appendChild(host);
+
+      <div class="label" aria-hidden="true" title="InProgress">
+        <span class="letter">e</span>
+        <span class="letter">c</span>
+        <span class="letter">a</span>
+        <span class="letter">s</span>
+        <span class="letter">h</span>
+      </div>
+    `;
+        document.body.appendChild(host);
+        return;
+    }
+
+    // Хост уже есть — убедимся, что надпись добавлена
+    if (!host.querySelector(".label")) {
+        const label = document.createElement("div");
+        label.className = "label";
+        label.setAttribute("aria-hidden", "true");
+        label.setAttribute("title", "ecash");
+        label.innerHTML = `
+      <span class="letter">e</span>
+      <span class="letter">c</span>
+      <span class="letter">a</span>
+      <span class="letter">s</span>
+      <span class="letter">h</span>
+    `;
+        host.appendChild(label);
+    }
 }
+
 function hideMascot() { const el = document.getElementById("afm-mascot"); if (el) el.remove(); }
 
 /* ==============================================
