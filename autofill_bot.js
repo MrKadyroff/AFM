@@ -85,32 +85,129 @@ function setReactInputValue(el, value) {
     el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-async function selectDropdownUniversal(name, value) {
-    const opener = document.querySelector(`button[name="${name}"]`);
-    if (!opener) return false;
-    opener.focus(); opener.click();
-    await new Promise(r => setTimeout(r, 50));
+async function selectDropdownUniversal(name, value, opts = {}) {
+    const {
+        openDelay = 150,
+        step = 500,       // шаг прокрутки
+        maxScrolls = 40,  // сколько шагов максимум
+        findTimeout = 3000
+    } = opts;
 
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    const opener = document.querySelector(`button[name="${CSS.escape(name)}"]`);
+    if (!opener) return false;
+
+    // Открываем дропдаун
+    opener.focus();
+    opener.click();
+    await sleep(openDelay);
+
+    // Если есть поле фильтра — печатаем в него
     let input = opener.closest('div')?.querySelector('input[placeholder]');
-    if (!input) input = Array.from(document.querySelectorAll('input[placeholder]')).find(i => i.offsetParent !== null);
+    if (!input) {
+        input = Array.from(document.querySelectorAll('input[placeholder]'))
+            .find(i => i.offsetParent !== null);
+    }
     if (input) {
         await realUserType(input, value, 20);
-        await new Promise(r => setTimeout(r, 20));
+        await sleep(80);
     }
 
+    // Хелпер: ближайший скроллируемый родитель
+    function getScrollableParent(el) {
+        let node = el;
+        while (node && node !== document.body) {
+            const style = getComputedStyle(node);
+            const canScrollY = /(auto|scroll)/.test(style.overflowY);
+            if (canScrollY && node.scrollHeight > node.clientHeight) return node;
+            node = node.parentElement;
+        }
+        // запасной вариант — ищем самый высокий список опций в документе
+        const pools = Array.from(document.querySelectorAll('div,ul'))
+            .filter(x => x.scrollHeight > x.clientHeight && /(auto|scroll)/.test(getComputedStyle(x).overflowY))
+            .sort((a, b) => b.scrollHeight - a.scrollHeight);
+        return pools[0] || document.body;
+    }
+
+    // Хелпер: получить видимые опции, исключив сам opener
+    function getVisibleOptions() {
+        const buttons = Array.from(document.querySelectorAll(`button[name="${CSS.escape(name)}"][type="button"]`))
+            .filter(b => b !== opener); // исключаем хедер
+        // иногда заголовок не имеет type="button" — перестрахуемся
+        if (!buttons.length) {
+            return Array.from(document.querySelectorAll(`button[name="${CSS.escape(name)}"]`))
+                .filter(b => b !== opener);
+        }
+        return buttons;
+    }
+
+    // Нормализуем текст кнопки
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const target = norm(value);
+
+    // Пытаемся найти на видимой части
     let found = null;
-    const start = Date.now();
-    while (Date.now() - start < 1000) {
-        const opts = Array.from(document.querySelectorAll(`button[name="${name}"][type="button"]`));
-        found = opts.find(btn => ((btn.dataset?.name || btn.textContent || "").trim().toLowerCase() === value.trim().toLowerCase()))
-            || opts.find(btn => ((btn.dataset?.name || btn.textContent || "").trim().toLowerCase().includes(value.trim().toLowerCase())));
+    const t0 = Date.now();
+    while (Date.now() - t0 < findTimeout && !found) {
+        const optsNow = getVisibleOptions();
+        found =
+            optsNow.find(btn => norm(btn.dataset?.name || btn.textContent) === target) ||
+            optsNow.find(btn => norm(btn.dataset?.name || btn.textContent).includes(target));
         if (found) break;
-        await new Promise(r => setTimeout(r, 50));
+        await sleep(60);
     }
 
-    if (found) { found.click(); await new Promise(r => setTimeout(r, 50)); document.body.click(); return true; }
+    // Если не нашли — крутим список вниз и пере-ищем
+    if (!found) {
+        // найдём контейнер скролла относительно любой видимой опции/инпута/опенера
+        const probe = getVisibleOptions()[0] || input || opener;
+        const scroller = getScrollableParent(probe);
+
+        let i = 0;
+        let lastScrollTop = -1;
+        while (i < maxScrolls) {
+            // если дальше крутить некуда — выходим
+            if (scroller.scrollTop === lastScrollTop) break;
+            lastScrollTop = scroller.scrollTop;
+
+            scroller.scrollBy(0, step);
+            await sleep(120);
+
+            const optsNow = getVisibleOptions();
+            found =
+                optsNow.find(btn => norm(btn.dataset?.name || btn.textContent) === target) ||
+                optsNow.find(btn => norm(btn.dataset?.name || btn.textContent).includes(target));
+            if (found) break;
+
+            i++;
+        }
+    }
+
+    // План Б: клавиатурная навигация (если список управляемый клавишами)
+    if (!found && input) {
+        for (let i = 0; i < 50; i++) {
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+            await sleep(40);
+            const hover = document.querySelector('[aria-selected="true"], [data-highlighted="true"]');
+            if (hover) {
+                const txt = norm(hover.textContent || hover.dataset?.name);
+                if (txt.includes(target)) { found = hover; break; }
+            }
+        }
+    }
+
+    if (found) {
+        found.click();
+        await sleep(80);
+        // закрываем выпадашку кликом в «пустоту»
+        document.body.click();
+        return true;
+    }
+
     return false;
 }
+
 
 function setReactCheckbox(name, checked = true) {
     const cb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
