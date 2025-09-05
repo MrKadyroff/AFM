@@ -498,6 +498,7 @@ function observeAndBindActionButtons() {
     const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
     const styleDis = 'background:#ec4141;color:#fff;cursor:not-allowed;';
 
+
     observeAndBindActionButtons();
 
     // Подсказка по буферу

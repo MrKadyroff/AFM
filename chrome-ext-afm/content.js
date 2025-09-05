@@ -1,0 +1,1 @@
+console.log("[AFM] payload подключён через manifest, без eval");
