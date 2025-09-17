@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AFM sef (lite)
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5
-// @description  Автозаполнение AFM через буфер. Многопроходная заливка с жёстким сбросом, блокировка взаимодействия, лёгкий модальный оверлей. Мониторинг Сохранить/Подписать. AfmDocId читаем из form.form_number/URL, НЕ изменяем.
+// @version      1.6.6
+// @description  АФМ
 // @author       Ecash
 // @match        https://websfm.kz/form-fm/*
 // @grant        none
@@ -26,6 +26,44 @@ async function waitForElement(selector, timeout = 200) {
         await new Promise(r => setTimeout(r, 50));
     }
     return null;
+}
+
+const _raf = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+function _nativeSet(el, v = "") {
+    const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+    d && d.set ? d.set.call(el, v) : (el.value = v);
+}
+
+function _touchTracker(el, prev) {
+    try { el._valueTracker && el._valueTracker.setValue(prev); } catch { }
+}
+
+async function hardClearInput(el, attempts = 3) {
+    for (let i = 0; i < attempts; i++) {
+        const prev = el.value;
+        el.focus();
+        // select all
+        try { el.select(); el.setSelectionRange(0, prev.length); } catch { }
+        // пустим через нативный setter
+        _nativeSet(el, "");
+        _touchTracker(el, prev);
+        // события удаления/изменения
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        // даём React примениться
+        await _raf();
+
+        if ((el.value || "") === "") return true;
+
+        // крайний случай — имитация Backspace по выделенному
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+        el.dispatchEvent(new KeyboardEvent("keyup", { key: "Backspace", bubbles: true }));
+        await _raf();
+        if ((el.value || "") === "") return true;
+    }
+    return (el.value || "") === "";
 }
 
 async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 1500) {
@@ -114,7 +152,7 @@ async function selectDropdownUniversal(name, value, opts = {}) {
         await sleep(80);
     }
 
-    // Хелпер: ближайший скроллируемый родитель
+    // Хелперы
     function getScrollableParent(el) {
         let node = el;
         while (node && node !== document.body) {
@@ -123,18 +161,15 @@ async function selectDropdownUniversal(name, value, opts = {}) {
             if (canScrollY && node.scrollHeight > node.clientHeight) return node;
             node = node.parentElement;
         }
-        // запасной вариант — ищем самый высокий список опций в документе
         const pools = Array.from(document.querySelectorAll('div,ul'))
             .filter(x => x.scrollHeight > x.clientHeight && /(auto|scroll)/.test(getComputedStyle(x).overflowY))
             .sort((a, b) => b.scrollHeight - a.scrollHeight);
         return pools[0] || document.body;
     }
 
-    // Хелпер: получить видимые опции, исключив сам opener
     function getVisibleOptions() {
         const buttons = Array.from(document.querySelectorAll(`button[name="${CSS.escape(name)}"][type="button"]`))
-            .filter(b => b !== opener); // исключаем хедер
-        // иногда заголовок не имеет type="button" — перестрахуемся
+            .filter(b => b !== opener);
         if (!buttons.length) {
             return Array.from(document.querySelectorAll(`button[name="${CSS.escape(name)}"]`))
                 .filter(b => b !== opener);
@@ -142,11 +177,9 @@ async function selectDropdownUniversal(name, value, opts = {}) {
         return buttons;
     }
 
-    // Нормализуем текст кнопки
     const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const target = norm(value);
 
-    // Пытаемся найти на видимой части
     let found = null;
     const t0 = Date.now();
     while (Date.now() - t0 < findTimeout && !found) {
@@ -158,16 +191,13 @@ async function selectDropdownUniversal(name, value, opts = {}) {
         await sleep(60);
     }
 
-    // Если не нашли — крутим список вниз и пере-ищем
     if (!found) {
-        // найдём контейнер скролла относительно любой видимой опции/инпута/опенера
         const probe = getVisibleOptions()[0] || input || opener;
         const scroller = getScrollableParent(probe);
 
         let i = 0;
         let lastScrollTop = -1;
         while (i < maxScrolls) {
-            // если дальше крутить некуда — выходим
             if (scroller.scrollTop === lastScrollTop) break;
             lastScrollTop = scroller.scrollTop;
 
@@ -184,7 +214,6 @@ async function selectDropdownUniversal(name, value, opts = {}) {
         }
     }
 
-    // План Б: клавиатурная навигация (если список управляемый клавишами)
     if (!found && input) {
         for (let i = 0; i < 50; i++) {
             input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
@@ -200,14 +229,12 @@ async function selectDropdownUniversal(name, value, opts = {}) {
     if (found) {
         found.click();
         await sleep(80);
-        // закрываем выпадашку кликом в «пустоту»
         document.body.click();
         return true;
     }
 
     return false;
 }
-
 
 function setReactCheckbox(name, checked = true) {
     const cb = document.querySelector(`input[type="checkbox"][name="${name}"]`);
@@ -262,13 +289,14 @@ async function ensureSectionsForField(field) {
 }
 
 /* ---------- Жёсткий сброс поля перед повторным заполнением ---------- */
-function clearField(field) {
+async function clearField(field) {
     if (AFM_PROTECTED_NAMES.has(field.Name)) return;
 
     if (field.FieldType === "input") {
         const el = document.querySelector(`[name="${field.Name}"]`);
         if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
-            setReactInputValue(el, "");
+            await hardClearInput(el);
+            // короткий цикл фокуса — некоторые формы коммитят только на blur
             el.dispatchEvent(new Event("blur", { bubbles: true }));
             el.dispatchEvent(new Event("focus", { bubbles: true }));
         }
@@ -279,6 +307,7 @@ function clearField(field) {
         if (cb && cb.checked) {
             cb.click();
             cb.dispatchEvent(new Event("change", { bubbles: true }));
+            await _raf();
         }
         return;
     }
@@ -286,17 +315,16 @@ function clearField(field) {
         const hidden = document.querySelector(`input[name="${field.Name}"]`);
         if (hidden) {
             const last = hidden.value;
-            hidden.value = "";
-            const tracker = hidden._valueTracker;
-            if (tracker) tracker.setValue(last);
+            _nativeSet(hidden, "");
+            _touchTracker(hidden, last);
             hidden.dispatchEvent(new Event("input", { bubbles: true }));
             hidden.dispatchEvent(new Event("change", { bubbles: true }));
+            await _raf();
         }
         document.body.click();
         return;
     }
 }
-
 async function fillFieldOnce(field) {
     await ensureSectionsForField(field);
 
@@ -338,7 +366,7 @@ async function fillFieldsWithRetries(fields, maxPasses = 3) {
 
         for (const field of queue) {
             if (pass > 1) {
-                try { clearField(field); } catch (e) { console.warn("[AFM] clearField error:", field.Name, e); }
+                try { await clearField(field); } catch (e) { console.warn("[AFM] clearField error:", field.Name, e); }
                 await new Promise(r => setTimeout(r, 40));
             }
 
@@ -394,7 +422,7 @@ async function getAfmDocId() {
 }
 
 /* =========================
-   [3] Лёгкий UI: overlay (обновлено: красивая модалка + таймер + счётчики)
+   [3] Красивая УВЕЛИЧЕННАЯ модалка + таймер + счётчики
    ========================= */
 let _afmTimerId = null;
 let _afmStartTs = 0;
@@ -404,45 +432,35 @@ function ensureOverlayStyles() {
     const s = document.createElement("style");
     s.id = "afm-style";
     s.textContent = `
-    :root {
-      --afm-overlay-bg: rgba(14,18,26,.22);
-      --afm-card-grad-top: #1f2530;
-      --afm-card-grad-bot: #1b212b;
-      --afm-card-border: #2e3644;
-      --afm-text-main: #ffffff;
-      --afm-text-sub: #d0d6e2;
-      --afm-accent-1: #1fd1f9;
-      --afm-accent-2: #b621fe;
-      --afm-spinner: #7da2ff;
+    :root{
+      --afm-overlay-bg: rgba(14,18,26,.26);
+      --afm-card-grad-top:#1f2530; --afm-card-grad-bot:#1b212b;
+      --afm-card-border:#2e3644; --afm-text-main:#fff; --afm-text-sub:#d0d6e2;
+      --afm-accent-1:#1fd1f9; --afm-accent-2:#b621fe; --afm-spinner:#7da2ff;
     }
     #afm-loading-overlay{
-      position: fixed; inset: 0;
-      background: var(--afm-overlay-bg);
-      z-index: 99999;
-      display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      color: var(--afm-text-main);
-      backdrop-filter: none;
-      animation: afm-fade-in .12s ease-out;
+      position:fixed; inset:0; background:var(--afm-overlay-bg); z-index:99999;
+      display:flex; align-items:center; justify-content:center;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; color:var(--afm-text-main);
+      animation:afm-fade-in .12s ease-out;
     }
     #afm-loading-overlay .afm-card{
-      width: min(520px, 92vw);
-      background: linear-gradient(180deg, var(--afm-card-grad-top), var(--afm-card-grad-bot));
-      border: 1px solid var(--afm-card-border);
-      border-radius: 14px;
-      padding: 20px 22px;
-      box-shadow: 0 12px 50px rgba(0,0,0,.35);
+      width:min(680px,94vw); /* больше карточка */
+      background:linear-gradient(180deg,var(--afm-card-grad-top),var(--afm-card-grad-bot));
+      border:1px solid var(--afm-card-border); border-radius:16px;
+      padding:26px 26px; /* чуть больше отступы */
+      box-shadow:0 14px 60px rgba(0,0,0,.38);
     }
-    #afm-loading-overlay .afm-row{ display:flex; align-items:center; gap:12px; }
-    #afm-loading-overlay .afm-title{ font-size:16px; font-weight:600; }
-    #afm-loading-overlay .afm-sub{ font-size:13px; color:var(--afm-text-sub); opacity:.85; margin-top:4px; }
-    #afm-loading-overlay .afm-kpi{ margin-top:10px; font-size:13px; opacity:.95; display:flex; gap:16px; flex-wrap:wrap; }
-    #afm-loading-overlay .afm-kpi b{ color:#fff; }
-    #afm-loading-overlay .afm-bar{ margin-top:14px; width:100%; height:8px; background:#2a3240; border-radius:999px; overflow:hidden; }
-    #afm-loading-overlay .afm-bar > div{ height:100%; width:0%; background:linear-gradient(90deg, var(--afm-accent-1), var(--afm-accent-2)); transition:width .25s ease; }
-    #afm-loading-overlay .afm-spin{ width:22px; height:22px; flex:0 0 22px; border-radius:50%; border:3px solid var(--afm-spinner); border-top-color:transparent; animation: afm-rot .8s linear infinite; }
-    @keyframes afm-rot{ to{ transform: rotate(360deg); } }
-    @keyframes afm-fade-in{ from{ opacity:0; transform: translateY(-4px);} to{ opacity:1; transform:none;} }
+    #afm-loading-overlay .afm-row{display:flex;align-items:center;gap:14px;}
+    #afm-loading-overlay .afm-title{font-size:18px;font-weight:700;} /* +2px */
+    #afm-loading-overlay .afm-sub{font-size:14px;color:var(--afm-text-sub);opacity:.9;margin-top:4px;} /* +1px */
+    #afm-loading-overlay .afm-kpi{margin-top:12px;font-size:14px;opacity:.95;display:flex;gap:18px;flex-wrap:wrap;} /* +1px */
+    #afm-loading-overlay .afm-kpi b{color:#fff;}
+    #afm-loading-overlay .afm-bar{margin-top:16px;width:100%;height:10px;background:#2a3240;border-radius:999px;overflow:hidden;} /* выше и толще */
+    #afm-loading-overlay .afm-bar>div{height:100%;width:0%;background:linear-gradient(90deg,var(--afm-accent-1),var(--afm-accent-2));transition:width .25s ease;}
+    #afm-loading-overlay .afm-spin{width:26px;height:26px;flex:0 0 26px;border-radius:50%;border:3px solid var(--afm-spinner);border-top-color:transparent;animation:afm-rot .8s linear infinite;} /* больше спиннер */
+    @keyframes afm-rot{to{transform:rotate(360deg);}}
+    @keyframes afm-fade-in{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
   `;
     document.head.appendChild(s);
 }
@@ -517,23 +535,49 @@ function hideOverlay() {
 }
 
 /* =========================
-   [3.5] Блокировка взаимодействия
+   [3.5] СУПЕР-блокировка взаимодействия
    ========================= */
 const AFM_BLOCKER_ID = "afm-interaction-lock";
 let _afm_unbinders = [];
+let _afm_prevBody = null;
 function lockInteraction() {
     if (document.getElementById(AFM_BLOCKER_ID)) return;
+
+    // Сохраняем стили скролла/тача, чтобы вернуть потом
+    if (!_afm_prevBody) {
+        _afm_prevBody = {
+            bodyOverflow: document.body.style.overflow,
+            htmlOverflow: document.documentElement.style.overflow,
+            userSelect: document.body.style.userSelect,
+            touchAction: document.body.style.touchAction,
+            overscroll: document.documentElement.style.overscrollBehavior,
+        };
+    }
+    // Вырубаем скролл, тач и выделение
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.userSelect = "none";
+    document.body.style.touchAction = "none";
+    document.documentElement.style.overscrollBehavior = "none";
+
+    // Прокладка над всей страницей
     const blocker = document.createElement("div");
     blocker.id = AFM_BLOCKER_ID;
     blocker.style = `position: fixed; inset: 0; z-index: 99998; cursor: wait; background: transparent;`;
     const stop = e => { e.stopPropagation(); e.preventDefault(); };
-    ["pointerdown", "pointerup", "pointermove", "click", "dblclick", "contextmenu", "mousedown", "mouseup", "mousemove", "wheel", "touchstart", "touchmove", "touchend"]
-        .forEach(ev => blocker.addEventListener(ev, stop, { passive: false }));
+    [
+        "pointerdown", "pointerup", "pointermove", "click", "dblclick", "contextmenu",
+        "mousedown", "mouseup", "mousemove", "wheel", "touchstart", "touchmove", "touchend",
+        "dragstart", "selectstart"
+    ].forEach(ev => blocker.addEventListener(ev, stop, { passive: false }));
     document.body.appendChild(blocker);
+
+    // Клавиатура — тоже стоп
     const keyHandler = e => { e.stopPropagation(); e.preventDefault(); };
     window.addEventListener("keydown", keyHandler, true);
     window.addEventListener("keypress", keyHandler, true);
     window.addEventListener("keyup", keyHandler, true);
+
     _afm_unbinders.push(() => {
         window.removeEventListener("keydown", keyHandler, true);
         window.removeEventListener("keypress", keyHandler, true);
@@ -541,11 +585,22 @@ function lockInteraction() {
         blocker.remove();
     });
 }
+
 function unlockInteraction() {
     try { _afm_unbinders.forEach(fn => fn()); } catch { }
     _afm_unbinders = [];
     const b = document.getElementById(AFM_BLOCKER_ID);
     if (b) b.remove();
+
+    // Возвращаем стили страницы
+    if (_afm_prevBody) {
+        document.body.style.overflow = _afm_prevBody.bodyOverflow ?? "";
+        document.documentElement.style.overflow = _afm_prevBody.htmlOverflow ?? "";
+        document.body.style.userSelect = _afm_prevBody.userSelect ?? "";
+        document.body.style.touchAction = _afm_prevBody.touchAction ?? "";
+        document.documentElement.style.overscrollBehavior = _afm_prevBody.overscroll ?? "";
+        _afm_prevBody = null;
+    }
 }
 
 /* ==============================================
@@ -588,9 +643,9 @@ function observeAndBindActionButtons() {
    ========================= */
 (function () {
     'use strict';
-    console.log("[AFM] Loaded v1.6.5 (lite: retries+hard-reset + lock + overlay)");
+    console.log("[AFM] Loaded v1.6.6 (lite: stronger lock + bigger modal)");
 
-    // Небольшая, но лёгкая кнопка (как у тебя — без изменений)
+    // Кнопку «Заполнить» НЕ трогаю — как у тебя
     const pulseStyle = document.createElement('style');
     pulseStyle.innerHTML = `
     .afm-pulse { position: fixed; left: 50%; top: 10%; transform: translate(-50%, 10px); z-index: 9999; }
@@ -610,7 +665,6 @@ function observeAndBindActionButtons() {
     const styleProcess = 'background:#ffa726;color:#222;cursor:wait;';
     const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
     const styleDis = 'background:#ec4141;color:#fff;cursor:not-allowed;';
-
 
     observeAndBindActionButtons();
 
