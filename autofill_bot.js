@@ -320,11 +320,17 @@ async function fillFieldOnce(field) {
     return isFieldFilled(field);
 }
 
-/** Многопроходная заливка: с 2-го прохода предварительно очищаем поля */
+/** Многопроходная заливка: с 2-го прохода предварительно очищаем поля
+ *  + UI: обновляем счётчики в модалке (заполнено/осталось/всего)
+ */
 async function fillFieldsWithRetries(fields, maxPasses = 3) {
     let queue = fields
         .filter(f => ["input", "select", "checkbox"].includes(f.FieldType))
         .filter(f => !AFM_PROTECTED_NAMES.has(f.Name));
+
+    const TOTAL = queue.length;
+    let doneNames = new Set();
+    updateOverlayCounters({ total: TOTAL, filled: 0 }); // инициализация
 
     for (let pass = 1; pass <= maxPasses && queue.length; pass++) {
         const next = [];
@@ -337,7 +343,12 @@ async function fillFieldsWithRetries(fields, maxPasses = 3) {
             }
 
             const ok = await fillFieldOnce(field);
-            if (!ok) next.push(field);
+            if (!ok) {
+                next.push(field);
+            } else {
+                doneNames.add(field.Name);
+                updateOverlayCounters({ total: TOTAL, filled: doneNames.size });
+            }
         }
         queue = next;
         console.log(`[AFM] Pass ${pass} done, remaining: ${queue.length}`);
@@ -383,25 +394,127 @@ async function getAfmDocId() {
 }
 
 /* =========================
-   [3] Лёгкий UI: overlay
+   [3] Лёгкий UI: overlay (обновлено: красивая модалка + таймер + счётчики)
    ========================= */
+let _afmTimerId = null;
+let _afmStartTs = 0;
+
+function ensureOverlayStyles() {
+    if (document.getElementById("afm-style")) return;
+    const s = document.createElement("style");
+    s.id = "afm-style";
+    s.textContent = `
+    :root {
+      --afm-overlay-bg: rgba(14,18,26,.22);
+      --afm-card-grad-top: #1f2530;
+      --afm-card-grad-bot: #1b212b;
+      --afm-card-border: #2e3644;
+      --afm-text-main: #ffffff;
+      --afm-text-sub: #d0d6e2;
+      --afm-accent-1: #1fd1f9;
+      --afm-accent-2: #b621fe;
+      --afm-spinner: #7da2ff;
+    }
+    #afm-loading-overlay{
+      position: fixed; inset: 0;
+      background: var(--afm-overlay-bg);
+      z-index: 99999;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: var(--afm-text-main);
+      backdrop-filter: none;
+      animation: afm-fade-in .12s ease-out;
+    }
+    #afm-loading-overlay .afm-card{
+      width: min(520px, 92vw);
+      background: linear-gradient(180deg, var(--afm-card-grad-top), var(--afm-card-grad-bot));
+      border: 1px solid var(--afm-card-border);
+      border-radius: 14px;
+      padding: 20px 22px;
+      box-shadow: 0 12px 50px rgba(0,0,0,.35);
+    }
+    #afm-loading-overlay .afm-row{ display:flex; align-items:center; gap:12px; }
+    #afm-loading-overlay .afm-title{ font-size:16px; font-weight:600; }
+    #afm-loading-overlay .afm-sub{ font-size:13px; color:var(--afm-text-sub); opacity:.85; margin-top:4px; }
+    #afm-loading-overlay .afm-kpi{ margin-top:10px; font-size:13px; opacity:.95; display:flex; gap:16px; flex-wrap:wrap; }
+    #afm-loading-overlay .afm-kpi b{ color:#fff; }
+    #afm-loading-overlay .afm-bar{ margin-top:14px; width:100%; height:8px; background:#2a3240; border-radius:999px; overflow:hidden; }
+    #afm-loading-overlay .afm-bar > div{ height:100%; width:0%; background:linear-gradient(90deg, var(--afm-accent-1), var(--afm-accent-2)); transition:width .25s ease; }
+    #afm-loading-overlay .afm-spin{ width:22px; height:22px; flex:0 0 22px; border-radius:50%; border:3px solid var(--afm-spinner); border-top-color:transparent; animation: afm-rot .8s linear infinite; }
+    @keyframes afm-rot{ to{ transform: rotate(360deg); } }
+    @keyframes afm-fade-in{ from{ opacity:0; transform: translateY(-4px);} to{ opacity:1; transform:none;} }
+  `;
+    document.head.appendChild(s);
+}
+
+function fmt(ms) {
+    const s = Math.floor(ms / 1000);
+    const hh = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    const pad = n => (n < 10 ? "0" + n : "" + n);
+    return hh > 0 ? `${pad(hh)}:${pad(mm)}:${pad(ss)}` : `${pad(mm)}:${pad(ss)}`;
+}
+
 function showOverlay(text = "Загрузка...") {
+    ensureOverlayStyles();
     if (document.getElementById("afm-loading-overlay")) return;
+
+    _afmStartTs = Date.now();
     const overlay = document.createElement("div");
     overlay.id = "afm-loading-overlay";
-    overlay.style = `
-    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
-    z-index: 99999; display: flex; align-items: center; justify-content: center;
-    font-size: 1rem; color: white; font-family: inherit; transition: opacity .2s; pointer-events: all;
-  `;
     overlay.innerHTML = `
-    <div style="padding: 20px 28px; background: #282c34; border-radius: 12px; box-shadow: 0 8px 40px #0007;">
-      <span>${text}</span>
+    <div class="afm-card">
+      <div class="afm-row">
+        <div class="afm-spin"></div>
+        <div>
+          <div class="afm-title">Автозаполнение формы</div>
+          <div class="afm-sub" id="afm-sub">${text}</div>
+        </div>
+      </div>
+      <div class="afm-kpi">
+        <div>Время: <b id="afm-time">00:00</b></div>
+        <div>Заполнено: <b id="afm-filled">0</b> из <b id="afm-total">0</b></div>
+        <div>Осталось: <b id="afm-left">0</b></div>
+      </div>
+      <div class="afm-bar"><div id="afm-bar-inner" style="width:0%"></div></div>
     </div>
   `;
     document.body.appendChild(overlay);
+
+    // таймер времени
+    const tick = () => {
+        const el = document.getElementById("afm-time");
+        if (!el) return;
+        el.textContent = fmt(Date.now() - _afmStartTs);
+    };
+    _afmTimerId = setInterval(tick, 1000);
+    tick();
 }
-function hideOverlay() { const overlay = document.getElementById("afm-loading-overlay"); if (overlay) overlay.remove(); }
+
+function updateOverlayCounters({ total, filled }) {
+    const totalEl = document.getElementById("afm-total");
+    const filledEl = document.getElementById("afm-filled");
+    const leftEl = document.getElementById("afm-left");
+    const bar = document.getElementById("afm-bar-inner");
+    if (!totalEl || !filledEl || !leftEl || !bar) return;
+
+    const t = Math.max(0, total | 0);
+    const f = Math.min(Math.max(0, filled | 0), t);
+    const left = Math.max(0, t - f);
+    const pct = t === 0 ? 0 : Math.round((f / t) * 100);
+
+    totalEl.textContent = String(t);
+    filledEl.textContent = String(f);
+    leftEl.textContent = String(left);
+    bar.style.width = `${pct}%`;
+}
+
+function hideOverlay() {
+    if (_afmTimerId) { clearInterval(_afmTimerId); _afmTimerId = null; }
+    const overlay = document.getElementById("afm-loading-overlay");
+    if (overlay) overlay.remove();
+}
 
 /* =========================
    [3.5] Блокировка взаимодействия
@@ -477,7 +590,7 @@ function observeAndBindActionButtons() {
     'use strict';
     console.log("[AFM] Loaded v1.6.5 (lite: retries+hard-reset + lock + overlay)");
 
-    // Небольшая, но лёгкая кнопка
+    // Небольшая, но лёгкая кнопка (как у тебя — без изменений)
     const pulseStyle = document.createElement('style');
     pulseStyle.innerHTML = `
     .afm-pulse { position: fixed; left: 50%; top: 10%; transform: translate(-50%, 10px); z-index: 9999; }
@@ -546,7 +659,7 @@ function observeAndBindActionButtons() {
                 if (maybeBK) AFM_STATE.businessKey = maybeBK;
                 if (fields.initiator) AFM_STATE.initiator = fields.initiator;
 
-                // 🔁 многопроходная заливка с жёстким сбросом
+                // 🔁 многопроходная заливка с жёстким сбросом (+ счётчики)
                 let notFilled = [];
                 try {
                     notFilled = await fillFieldsWithRetries(fields.json, 3);
