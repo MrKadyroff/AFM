@@ -11,7 +11,7 @@
 /* =========================
    [0] Глобальное состояние
    ========================= */
-const AFM_STATE = { businessKey: "", initiator: "", canSign: false };
+const AFM_STATE = { businessKey: "", initiator: "", canSign: true };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
 
@@ -663,19 +663,19 @@ function observeAndBindActionButtons() {
         bindActionButtonOnce(document.querySelector('button[name="save"]'), 2);
 
         // Подписать — биндим/показываем когда можно, иначе прячем и ставим наблюдатель
-        if (AFM_STATE.canSign) {
-            bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3);
-            showSubscribeOnce();
-            if (hideObserver) { hideObserver.disconnect(); hideObserver = null; }
-        } else {
-            bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3); // оставляем логику биндинга
-            hideSubscribeOnce();
-            // если ещё нет наблюдателя — создаём, чтобы прятать кнопку при её появлении/перерисовке
-            if (!hideObserver) {
-                hideObserver = new MutationObserver(hideSubscribeMut);
-                hideObserver.observe(document.body, { childList: true, subtree: true });
-            }
+        // if (AFM_STATE.canSign) {
+        //     bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3);
+        //     showSubscribeOnce();
+        //     if (hideObserver) { hideObserver.disconnect(); hideObserver = null; }
+        // } else {
+        bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3); // оставляем логику биндинга
+        hideSubscribeOnce();
+        // если ещё нет наблюдателя — создаём, чтобы прятать кнопку при её появлении/перерисовке
+        if (!hideObserver) {
+            hideObserver = new MutationObserver(hideSubscribeMut);
+            hideObserver.observe(document.body, { childList: true, subtree: true });
         }
+        // }
     };
 
     tryBindNow();
