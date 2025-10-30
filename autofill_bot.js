@@ -11,7 +11,7 @@
 /* =========================
    [0] Глобальное состояние
    ========================= */
-const AFM_STATE = { businessKey: "", initiator: "", canSign: true };
+const AFM_STATE = { businessKey: "", initiator: "" };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
 
@@ -392,7 +392,6 @@ async function getDataFromBuffer() {
         const clipboardText = await navigator.clipboard.readText();
         const fields = JSON.parse(clipboardText);
         if (fields?.initiator) AFM_STATE.initiator = fields.initiator;
-        if (fields?.canSign) AFM_STATE.canSign = fields.canSign;
         if (fields?.json && Array.isArray(fields.json)) {
             const bk = fields.json.find(f => f.Name === "businessKey")?.Value;
             if (bk) AFM_STATE.businessKey = bk;
@@ -402,8 +401,6 @@ async function getDataFromBuffer() {
         return null;
     }
 }
-
-console.log("AFMCANSIGN", AFM_STATE)
 
 function getAppIdFromUrl() {
     const parts = location.pathname.split("/").filter(Boolean);
@@ -632,52 +629,10 @@ function bindActionButtonOnce(btn, statusValue) {
     });
 }
 function observeAndBindActionButtons() {
-    let hideObserver = null;
-
-    const hideSubscribeOnce = () => {
-        const subBtn = document.querySelector('button[name="subscribe"]');
-        if (subBtn) {
-            subBtn.style.display = 'none';
-            subBtn.disabled = true;
-        }
-    };
-
-    const showSubscribeOnce = () => {
-        const subBtn = document.querySelector('button[name="subscribe"]');
-        if (subBtn) {
-            subBtn.style.display = '';
-            subBtn.disabled = false;
-        }
-    };
-
-    const hideSubscribeMut = () => {
-        // прячем любую появившуюся кнопку подписать
-        const subBtn = document.querySelector('button[name="subscribe"]');
-        if (subBtn) {
-            subBtn.style.display = 'none';
-            subBtn.disabled = true;
-        }
-    };
-
     const tryBindNow = () => {
         bindActionButtonOnce(document.querySelector('button[name="save"]'), 2);
-
-        // Подписать — биндим/показываем когда можно, иначе прячем и ставим наблюдатель
-        // if (AFM_STATE.canSign) {
-        //     bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3);
-        //     showSubscribeOnce();
-        //     if (hideObserver) { hideObserver.disconnect(); hideObserver = null; }
-        // } else {
-        bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3); // оставляем логику биндинга
-        hideSubscribeOnce();
-        // если ещё нет наблюдателя — создаём, чтобы прятать кнопку при её появлении/перерисовке
-        if (!hideObserver) {
-            hideObserver = new MutationObserver(hideSubscribeMut);
-            hideObserver.observe(document.body, { childList: true, subtree: true });
-        }
-        // }
+        bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3);
     };
-
     tryBindNow();
     const observer = new MutationObserver(() => tryBindNow());
     observer.observe(document.body, { childList: true, subtree: true });
