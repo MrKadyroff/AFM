@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.6.6
 // @description  АФМ
-// @author       Ecash
+// @author       AFM
 // @match        https://websfm.kz/form-fm/*
 // @grant        none
 // ==/UserScript==
@@ -410,7 +410,6 @@ function getAppIdFromUrl() {
 }
 
 async function getAfmDocId() {
-    // читаем form.form_number, НИЧЕГО в него не пишем
     let el = document.querySelector('input[name="form.form_number"]');
     if (!el || !el.value?.trim()) {
         await openAccordionByHeader("форма фм-1", ["form.form_number"]);
@@ -421,8 +420,19 @@ async function getAfmDocId() {
     return v || getAppIdFromUrl(); // fallback к URL, если поле скрыто/пусто
 }
 
+async function getRequestId() {
+    let el = document.querySelector('input[name="operation.number"]');
+    if (!el || !el.value?.trim()) {
+        await openAccordionByHeader("сведения об операции", ["operation.number"]);
+        await new Promise(r => setTimeout(r, 100));
+        el = document.querySelector('input[name="operation.number"]');
+    }
+    const v = el && typeof el.value !== 'undefined' ? String(el.value).trim() : "";
+    return v || getAppIdFromUrl(); // fallback к URL, если поле скрыто/пусто
+}
+
 /* =========================
-   [3] Красивая УВЕЛИЧЕННАЯ модалка + таймер + счётчики
+   [3]  модалка + таймер + счётчики
    ========================= */
 let _afmTimerId = null;
 let _afmStartTs = 0;
@@ -612,8 +622,9 @@ function bindActionButtonOnce(btn, statusValue) {
 
     btn.addEventListener('click', async () => {
         const afmDocId = await getAfmDocId();
+        const requestId = await getRequestId();
         const payload = {
-            requestId: AFM_STATE.businessKey || "",
+            requestId: AFM_STATE.businessKey || requestId || "",
             AfmDocId: afmDocId || "",
             afmId: afmDocId || "",
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
