@@ -1,0 +1,11 @@
+{
+    "name": "afm-autofill",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "obfuscate": "node scripts/obfuscate.mjs"
+    },
+    "devDependencies": {
+        "javascript-obfuscator": "^4.0.2"
+    }
+}

@@ -11,7 +11,7 @@
 /* =========================
    [0] Глобальное состояние
    ========================= */
-const AFM_STATE = { businessKey: "", initiator: "" };
+const AFM_STATE = { businessKey: "", initiator: "", requestId: "" };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
 
@@ -395,6 +395,11 @@ async function getDataFromBuffer() {
         if (fields?.json && Array.isArray(fields.json)) {
             const bk = fields.json.find(f => f.Name === "businessKey")?.Value;
             if (bk) AFM_STATE.businessKey = bk;
+            const reqFromJson =
+                fields.json.find(f => f.Name === "requestId")?.Value ||
+                fields.json.find(f => f.Name === "form.form_number")?.Value ||
+                fields.json.find(f => f.Name === "operation.number")?.Value;
+            if (reqFromJson) AFM_STATE.requestId = String(reqFromJson).trim();
         }
         return fields;
     } catch {
@@ -429,6 +434,13 @@ async function getRequestId() {
     }
     const v = el && typeof el.value !== 'undefined' ? String(el.value).trim() : "";
     return v || getAppIdFromUrl(); // fallback к URL, если поле скрыто/пусто
+}
+
+async function getRequestIdForStatus() {
+    if (AFM_STATE.requestId) return AFM_STATE.requestId;
+    const formNumber = await getAfmDocId();
+    if (formNumber) return formNumber;
+    return await getRequestId();
 }
 
 /* =========================
@@ -622,9 +634,9 @@ function bindActionButtonOnce(btn, statusValue) {
 
     btn.addEventListener('click', async () => {
         const afmDocId = await getAfmDocId();
-        const requestId = await getRequestId();
+        const requestId = await getRequestIdForStatus();
         const payload = {
-            requestId: AFM_STATE.businessKey || requestId || "",
+            requestId: AFM_STATE.requestId || requestId || "",
             AfmDocId: afmDocId || "",
             afmId: afmDocId || "",
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
