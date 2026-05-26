@@ -3,6 +3,10 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "build": "node build.mjs"
+        "build": "node build.mjs --source=local --variant=obs",
+        "build:obs": "node build.mjs --source=local --variant=obs",
+        "build:bot": "node build.mjs --source=local --variant=bot",
+        "build:remote:obs": "node build.mjs --source=remote --variant=obs",
+        "build:remote:bot": "node build.mjs --source=remote --variant=bot"
     }
 }
