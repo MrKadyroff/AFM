@@ -4,14 +4,8 @@
     "type": "module",
     "scripts": {
         "obfuscate": "node scripts/obfuscate.mjs",
-        "build:ext": "npm run build:ext:secure",
-        "build:ext:secure": "npm run obfuscate && npm --prefix chrome-ext-afm run build:obs",
-        "build:ext:bot": "npm --prefix chrome-ext-afm run build:bot",
-        "build:ext:remote": "npm --prefix chrome-ext-afm run build:remote:obs",
-        "ext:ready": "npm run build:ext && node scripts/make-extension-ready.mjs",
-        "ext:ready:secure": "npm run build:ext:secure && node scripts/make-extension-ready.mjs",
-        "ext:ready:bot": "npm run build:ext:bot && node scripts/make-extension-ready.mjs",
-        "ext:ready:remote": "npm run build:ext:remote && node scripts/make-extension-ready.mjs"
+        "build:ext": "npm run obfuscate && npm --prefix chrome-ext-afm run build",
+        "ext:ready": "npm run build:ext && node scripts/make-extension-ready.mjs"
     },
     "devDependencies": {
         "javascript-obfuscator": "^4.0.2"

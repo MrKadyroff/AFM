@@ -14,6 +14,12 @@
 const AFM_STATE = { businessKey: "", initiator: "", requestId: "", afmDocId: "" };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
+const AFM_BUFFER_ISSUE = { code: "unknown", detail: "" };
+
+function setBufferIssue(code, detail = "") {
+    AFM_BUFFER_ISSUE.code = code;
+    AFM_BUFFER_ISSUE.detail = String(detail || "");
+}
 
 /* =========================
    [1] Хелперы DOM/React
@@ -388,9 +394,37 @@ async function fillFieldsWithRetries(fields, maxPasses = 3) {
    [2] Данные из буфера/DOM
    ========================= */
 async function getDataFromBuffer() {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
+        setBufferIssue("clipboard_unavailable", "navigator.clipboard.readText is not available");
+        return null;
+    }
+
+    let clipboardText = "";
     try {
-        const clipboardText = await navigator.clipboard.readText();
+        clipboardText = await navigator.clipboard.readText();
+    } catch (err) {
+        const name = err?.name || "Error";
+        const message = err?.message || "Clipboard read failed";
+        if (name === "NotAllowedError" || name === "SecurityError" || /denied|not allowed|permission/i.test(message)) {
+            setBufferIssue("clipboard_blocked", `${name}: ${message}`);
+        } else {
+            setBufferIssue("clipboard_error", `${name}: ${message}`);
+        }
+        return null;
+    }
+
+    if (!clipboardText || !clipboardText.trim()) {
+        setBufferIssue("empty_clipboard", "Clipboard is empty");
+        return null;
+    }
+
+    try {
         const fields = JSON.parse(clipboardText);
+        if (!fields?.json || !Array.isArray(fields.json) || fields.json.length === 0) {
+            setBufferIssue("missing_payload", "JSON has no fields.json payload");
+            return null;
+        }
+
         if (fields?.initiator) AFM_STATE.initiator = fields.initiator;
         if (fields?.json && Array.isArray(fields.json)) {
             const bk = fields.json.find(f => f.Name === "businessKey")?.Value;
@@ -403,8 +437,11 @@ async function getDataFromBuffer() {
                 fields.json.find(f => f.Name === "form.form_number")?.Value;
             if (reqFromJson) AFM_STATE.requestId = String(reqFromJson).trim();
         }
+        setBufferIssue("ok", "");
         return fields;
-    } catch {
+    } catch (err) {
+        const message = err?.message || "Invalid JSON";
+        setBufferIssue("invalid_json", message);
         return null;
     }
 }
@@ -696,105 +733,278 @@ function observeAndBindActionButtons() {
    ========================= */
 (function () {
     'use strict';
-    console.log("[AFM] Loaded v1.6.6 (lite: stronger lock + bigger modal)");
 
-    // Кнопку «Заполнить» НЕ трогаю — как у тебя
-    const pulseStyle = document.createElement('style');
-    pulseStyle.innerHTML = `
+    const isFormPage = () => /^\/form-fm\/[^/]+/.test(location.pathname);
+    const tryInitAfmUi = () => {
+        if (!isFormPage()) return false;
+        if (!document.body) return false;
+        if (document.getElementById("afm-fill-btn")) return true;
+        initAfmUi();
+        return true;
+    };
+
+    // SPA case: script can be loaded before /form-fm route appears.
+    if (!tryInitAfmUi()) {
+        const routeWatcherId = setInterval(() => {
+            if (tryInitAfmUi()) clearInterval(routeWatcherId);
+        }, 400);
+    }
+
+    function initAfmUi() {
+        console.log("[AFM] Loaded v1.6.6 (lite: stronger lock + bigger modal)");
+
+        // Кнопку «Заполнить» НЕ трогаю — как у тебя
+        const pulseStyle = document.createElement('style');
+        pulseStyle.innerHTML = `
     .afm-pulse { position: fixed; left: 50%; top: 10%; transform: translate(-50%, 10px); z-index: 9999; }
     .afm-pulse { box-shadow: 0 0 0 0 #1976d240; transition: box-shadow .2s; }
     .afm-pulse:hover { box-shadow: 0 0 0 6px #1976d220; }
   `;
-    document.head.appendChild(pulseStyle);
+        document.head.appendChild(pulseStyle);
 
-    const btn = document.createElement("button");
-    btn.innerText = "Заполнить";
-    btn.className = "afm-pulse";
-    btn.style = `
-    padding: 12px 26px; font-size: 16px; border: none; border-radius: 8px;
-    background: #1976d2; color: #fff; cursor: pointer;
-  `;
-    const styleActive = 'background:#1976d2;color:#fff;cursor:pointer;';
-    const styleProcess = 'background:#ffa726;color:#222;cursor:wait;';
-    const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
-    const styleDis = 'background:#ec4141;color:#fff;cursor:not-allowed;';
-
-    observeAndBindActionButtons();
-
-    // Подсказка по буферу
-    setInterval(async () => {
-        const fields = await getDataFromBuffer();
-        if (fields == null) {
-            btn.disabled = true;
-            btn.innerText = "Нет данных. Нажмите кнопку АФМ в заявке.";
-            btn.style = btn.style.cssText + styleDis;
-        } else {
-            btn.disabled = false;
-            btn.innerText = "Заполнить";
-            btn.style = btn.style.cssText + styleActive;
-        }
-    }, 1500);
-
-    btn.onclick = async () => {
-        btn.disabled = true;
-        btn.innerText = "Заполняется...";
-        btn.style = btn.style.cssText + styleProcess;
-        showOverlay("Идёт автозаполнение формы. Пожалуйста, не кликайте и не используйте клавиатуру.");
-        lockInteraction();
-
-        (async () => {
-            try {
-                const fields = await getDataFromBuffer();
-                await new Promise(r => setTimeout(r, 100));
-
-                if (fields?.json == null) {
-                    btn.disabled = false;
-                    btn.innerText = "Заполнить";
-                    btn.style = btn.style.cssText + styleActive;
-                    hideOverlay(); unlockInteraction();
-                    alert("Нет данных. Нажмите кнопку АФМ в заявке.");
-                    return;
-                }
-
-                // Авто-раскрытие основных секций
-                await openAccordionByHeader("форма фм-1", ["form.operation_state", "form.operation_date"]);
-                await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
-                await new Promise(r => setTimeout(r, 200));
-
-                // Инициатор/бизнес-ключ
-                const maybeBK = fields.json.find(f => f.Name === "businessKey")?.Value;
-                if (maybeBK) AFM_STATE.businessKey = maybeBK;
-                if (fields.initiator) AFM_STATE.initiator = fields.initiator;
-
-                // 🔁 многопроходная заливка с жёстким сбросом (+ счётчики)
-                let notFilled = [];
-                try {
-                    notFilled = await fillFieldsWithRetries(fields.json, 3);
-                } catch (e) {
-                    console.error("[AFM] Ошибка в ретраях, fallback legacyFillOnce:", e);
-                    await legacyFillOnce(fields.json);
-                    notFilled = [];
-                }
-
-                if (notFilled.length) {
-                    console.warn("Не удалось заполнить поля:", notFilled.map(f => f.Name));
-                }
-
-                btn.disabled = false;
-                btn.innerText = "Заполнить";
-                btn.style = btn.style.cssText + styleDone;
-            } catch (e) {
-                console.error("[AFM] Autofill error:", e);
-            } finally {
-                hideOverlay();
-                unlockInteraction();
+        function ensureHintStyles() {
+            if (document.getElementById("afm-hint-style")) return;
+            const s = document.createElement("style");
+            s.id = "afm-hint-style";
+            s.textContent = `
+            #afm-user-hint {
+                position: fixed;
+                left: 50%;
+                top: calc(10% + 82px);
+                transform: translateX(-50%);
+                width: min(560px, 94vw);
+                z-index: 10000;
+                display: none;
+                font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
             }
-        })();
+            #afm-user-hint .afm-hint-card {
+                position: relative;
+                border-radius: 12px;
+                border: 1px solid var(--afm-hint-border);
+                background: var(--afm-hint-bg);
+                color: #fff;
+                padding: 12px 14px;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
+            }
+            #afm-user-hint .afm-hint-arrow {
+                width: 0;
+                height: 0;
+                margin: 0 auto;
+                border-left: 10px solid transparent;
+                border-right: 10px solid transparent;
+                border-bottom: 10px solid var(--afm-hint-bg);
+            }
+            #afm-user-hint .afm-hint-title {
+                font-size: 14px;
+                font-weight: 700;
+            }
+            #afm-user-hint .afm-hint-text {
+                margin-top: 4px;
+                font-size: 13px;
+                opacity: .95;
+            }
+            #afm-user-hint .afm-hint-list {
+                margin: 8px 0 0 18px;
+                padding: 0;
+                font-size: 13px;
+                line-height: 1.35;
+            }
+            #afm-user-hint.error {
+                --afm-hint-bg: #6b1d1d;
+                --afm-hint-border: #ef4444;
+            }
+            #afm-user-hint.warn {
+                --afm-hint-bg: #5f3c0f;
+                --afm-hint-border: #f59e0b;
+            }
+            #afm-user-hint.info {
+                --afm-hint-bg: #163b63;
+                --afm-hint-border: #60a5fa;
+            }
+        `;
+            document.head.appendChild(s);
+        }
 
-        await new Promise(r => setTimeout(r, 50));
-    };
+        function getHintForIssue(issueCode) {
+            if (issueCode === "clipboard_blocked") {
+                return {
+                    tone: "warn",
+                    title: "Буфер обмена отключен",
+                    text: "Расширение не может прочитать данные заявки.",
+                    steps: [
+                        "Нажмите на значок замка слева от адреса сайта.",
+                        "Разрешите доступ к буферу обмена для этой страницы.",
+                        "Обновите страницу и попробуйте снова."
+                    ]
+                };
+            }
+            if (issueCode === "empty_clipboard" || issueCode === "missing_payload") {
+                return {
+                    tone: "error",
+                    title: "Нет данных заявки",
+                    text: "В буфере нет JSON-данных для автозаполнения.",
+                    steps: [
+                        "Перейдите на quiq.kz.",
+                        "Откройте нужную заявку и нажмите кнопку АФМ (копировать данные).",
+                        "Вернитесь на форму и нажмите «Заполнить»."
+                    ]
+                };
+            }
+            if (issueCode === "invalid_json") {
+                return {
+                    tone: "error",
+                    title: "В буфере не данные АФМ",
+                    text: "Скопированный текст не распознан как формат заявки.",
+                    steps: [
+                        "Очистите буфер (скопируйте любой короткий текст).",
+                        "Снова скопируйте данные заявки кнопкой АФМ на quiq.kz.",
+                        "Повторите автозаполнение."
+                    ]
+                };
+            }
+            if (issueCode === "clipboard_unavailable" || issueCode === "clipboard_error") {
+                return {
+                    tone: "info",
+                    title: "Не удалось прочитать буфер",
+                    text: "Проверьте разрешения браузера и попробуйте снова.",
+                    steps: [
+                        "Обновите страницу.",
+                        "Проверьте разрешение «Буфер обмена» в настройках сайта.",
+                        "Скопируйте данные заявки заново."
+                    ]
+                };
+            }
+            return null;
+        }
 
-    document.body.appendChild(btn);
+        function showHintForIssue(issueCode) {
+            const hint = getHintForIssue(issueCode);
+            if (!hint) return;
+            ensureHintStyles();
+
+            let root = document.getElementById("afm-user-hint");
+            if (!root) {
+                root = document.createElement("div");
+                root.id = "afm-user-hint";
+                document.body.appendChild(root);
+            }
+
+            const stepsHtml = (hint.steps || []).map(step => `<li>${step}</li>`).join("");
+            root.className = hint.tone;
+            root.innerHTML = `
+            <div class="afm-hint-arrow"></div>
+            <div class="afm-hint-card">
+                <div class="afm-hint-title">${hint.title}</div>
+                <div class="afm-hint-text">${hint.text}</div>
+                ${stepsHtml ? `<ol class="afm-hint-list">${stepsHtml}</ol>` : ""}
+            </div>
+        `;
+            root.style.display = "block";
+        }
+
+        function hideHint() {
+            const root = document.getElementById("afm-user-hint");
+            if (root) root.style.display = "none";
+        }
+
+        const btn = document.createElement("button");
+        btn.id = "afm-fill-btn";
+        btn.innerText = "Заполнить";
+        btn.className = "afm-pulse";
+        const baseBtnStyle = `
+    padding: 12px 26px; font-size: 16px; border: none; border-radius: 8px;
+        background: #1976d2; color: #fff;
+  `;
+        btn.style = baseBtnStyle;
+        const styleActive = 'background:#1976d2;color:#fff;cursor:pointer;';
+        const styleProcess = 'background:#ffa726;color:#222;cursor:wait;';
+        const styleDone = 'background:#43a047;color:#fff;cursor:pointer;';
+        const styleDis = 'background:#ec4141;color:#fff;cursor:not-allowed;';
+
+        function setButtonState(mode, text) {
+            const map = {
+                active: { disabled: false, style: styleActive, text: "Заполнить" },
+                process: { disabled: true, style: styleProcess, text: "Заполняется..." },
+                done: { disabled: false, style: styleDone, text: "Заполнить" },
+                disabled: { disabled: true, style: styleDis, text: "Нет данных" }
+            };
+            const cfg = map[mode] || map.active;
+            btn.disabled = cfg.disabled;
+            btn.innerText = text || cfg.text;
+            btn.style.cssText = baseBtnStyle + cfg.style;
+        }
+
+        observeAndBindActionButtons();
+
+        // Подсказка по буферу
+        setInterval(async () => {
+            const fields = await getDataFromBuffer();
+            if (fields == null) {
+                setButtonState("disabled", "Нет данных. Смотрите подсказку ниже.");
+                showHintForIssue(AFM_BUFFER_ISSUE.code);
+            } else {
+                setButtonState("active", "Заполнить");
+                hideHint();
+            }
+        }, 1500);
+
+        btn.onclick = async () => {
+            setButtonState("process", "Заполняется...");
+            hideHint();
+            showOverlay("Идёт автозаполнение формы. Пожалуйста, не кликайте и не используйте клавиатуру.");
+            lockInteraction();
+
+            (async () => {
+                try {
+                    const fields = await getDataFromBuffer();
+                    await new Promise(r => setTimeout(r, 100));
+
+                    if (fields?.json == null) {
+                        setButtonState("active", "Заполнить");
+                        showHintForIssue(AFM_BUFFER_ISSUE.code);
+                        hideOverlay(); unlockInteraction();
+                        return;
+                    }
+
+                    // Авто-раскрытие основных секций
+                    await openAccordionByHeader("форма фм-1", ["form.operation_state", "form.operation_date"]);
+                    await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
+                    await new Promise(r => setTimeout(r, 200));
+
+                    // Инициатор/бизнес-ключ
+                    const maybeBK = fields.json.find(f => f.Name === "businessKey")?.Value;
+                    if (maybeBK) AFM_STATE.businessKey = maybeBK;
+                    if (fields.initiator) AFM_STATE.initiator = fields.initiator;
+
+                    // 🔁 многопроходная заливка с жёстким сбросом (+ счётчики)
+                    let notFilled = [];
+                    try {
+                        notFilled = await fillFieldsWithRetries(fields.json, 3);
+                    } catch (e) {
+                        console.error("[AFM] Ошибка в ретраях, fallback legacyFillOnce:", e);
+                        await legacyFillOnce(fields.json);
+                        notFilled = [];
+                    }
+
+                    if (notFilled.length) {
+                        console.warn("Не удалось заполнить поля:", notFilled.map(f => f.Name));
+                    }
+
+                    setButtonState("done", "Заполнить");
+                } catch (e) {
+                    console.error("[AFM] Autofill error:", e);
+                    setButtonState("active", "Заполнить");
+                } finally {
+                    hideOverlay();
+                    unlockInteraction();
+                }
+            })();
+
+            await new Promise(r => setTimeout(r, 50));
+        };
+
+        document.body.appendChild(btn);
+    }
 })();
 
 /* =========================

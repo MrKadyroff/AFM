@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://websfm.kz/form-fm/*"
+        "https://websfm.kz/*"
       ],
       "js": [
         "content.js",
