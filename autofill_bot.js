@@ -770,56 +770,144 @@ function observeAndBindActionButtons() {
             #afm-user-hint {
                 position: fixed;
                 left: 50%;
-                top: calc(10% + 82px);
-                transform: translateX(-50%);
+                top: calc(10% + 86px);
+                transform: translateX(-50%) translateY(-6px);
                 width: min(560px, 94vw);
                 z-index: 10000;
                 display: none;
+                opacity: 0;
+                transition: opacity .22s ease, transform .22s ease;
                 font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+                --afm-hint-bg: linear-gradient(135deg, rgba(11, 121, 96, .92), rgba(15, 69, 139, .92));
+                --afm-hint-border: rgba(130, 231, 205, .46);
+                --afm-hint-badge-bg: rgba(16, 185, 129, .95);
+            }
+            #afm-user-hint.show {
+                display: block;
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
             }
             #afm-user-hint .afm-hint-card {
                 position: relative;
-                border-radius: 12px;
+                border-radius: 20px;
                 border: 1px solid var(--afm-hint-border);
                 background: var(--afm-hint-bg);
                 color: #fff;
-                padding: 12px 14px;
-                box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
+                padding: 14px 15px;
+                box-shadow: 0 16px 36px rgba(0, 0, 0, .28);
+                backdrop-filter: blur(18px) saturate(170%);
+                -webkit-backdrop-filter: blur(18px) saturate(170%);
             }
-            #afm-user-hint .afm-hint-arrow {
+            #afm-user-hint .afm-hint-arrow-up {
                 width: 0;
                 height: 0;
                 margin: 0 auto;
                 border-left: 10px solid transparent;
                 border-right: 10px solid transparent;
-                border-bottom: 10px solid var(--afm-hint-bg);
+                border-bottom: 10px solid #ef4444;
+                filter: drop-shadow(0 -1px 0 rgba(248, 113, 113, .85));
+            }
+            #afm-user-hint .afm-hint-head {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            #afm-user-hint .afm-hint-badge {
+                width: 30px;
+                height: 30px;
+                border-radius: 999px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 17px;
+                font-weight: 700;
+                color: #fff;
+                background: var(--afm-hint-badge-bg);
+                box-shadow: inset 0 -5px 12px rgba(0, 0, 0, .18), 0 6px 12px rgba(0, 0, 0, .18);
             }
             #afm-user-hint .afm-hint-title {
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 700;
             }
             #afm-user-hint .afm-hint-text {
                 margin-top: 4px;
                 font-size: 13px;
-                opacity: .95;
+                opacity: .92;
             }
             #afm-user-hint .afm-hint-list {
-                margin: 8px 0 0 18px;
+                margin: 10px 0 0;
                 padding: 0;
+                list-style: none;
+                display: grid;
+                gap: 7px;
+            }
+            #afm-user-hint .afm-hint-list li {
+                display: flex;
+                align-items: flex-start;
+                gap: 8px;
                 font-size: 13px;
                 line-height: 1.35;
             }
+            #afm-user-hint .afm-step-num {
+                width: 20px;
+                height: 20px;
+                border-radius: 999px;
+                flex: 0 0 20px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                margin-top: 1px;
+                font-size: 11px;
+                font-weight: 700;
+                color: #fff;
+                background: rgba(255, 255, 255, .20);
+            }
             #afm-user-hint.error {
-                --afm-hint-bg: #6b1d1d;
-                --afm-hint-border: #ef4444;
+                --afm-hint-border: rgba(255, 156, 156, .56);
+                --afm-hint-badge-bg: rgba(235, 67, 89, .92);
             }
             #afm-user-hint.warn {
-                --afm-hint-bg: #5f3c0f;
-                --afm-hint-border: #f59e0b;
+                --afm-hint-border: rgba(255, 211, 132, .58);
+                --afm-hint-badge-bg: rgba(245, 158, 11, .95);
             }
             #afm-user-hint.info {
-                --afm-hint-bg: #163b63;
-                --afm-hint-border: #60a5fa;
+                --afm-hint-border: rgba(144, 215, 255, .56);
+                --afm-hint-badge-bg: rgba(59, 130, 246, .95);
+            }
+            #afm-lock-guide {
+                position: fixed;
+                left: 10%;
+                top: 10px;
+                z-index: 10001;
+                display: none;
+                align-items: center;
+                gap: 7px;
+                pointer-events: none;
+                font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+            }
+            #afm-lock-guide .afm-lock-arrow {
+                font-size: 24px;
+                line-height: 1;
+                color: #ef4444;
+                animation: afm-lock-bounce .9s ease-in-out infinite;
+                text-shadow: 0 8px 24px rgba(0, 0, 0, .42);
+            }
+            #afm-lock-guide .afm-lock-chip {
+                max-width: min(320px, 70vw);
+                padding: 6px 10px;
+                border-radius: 999px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #fff1f2;
+                background: rgba(127, 29, 29, .86);
+                border: 1px solid rgba(248, 113, 113, .64);
+                box-shadow: 0 10px 18px rgba(0, 0, 0, .25);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+            }
+            @keyframes afm-lock-bounce {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-4px); }
             }
         `;
             document.head.appendChild(s);
@@ -829,23 +917,25 @@ function observeAndBindActionButtons() {
             if (issueCode === "clipboard_blocked") {
                 return {
                     tone: "warn",
-                    title: "Буфер обмена отключен",
-                    text: "Расширение не может прочитать данные заявки.",
+                    target: "browser-lock",
+                    title: "Дайте доступ к буферу обмена",
+                    text: "Это нужно сделать один раз, дальше все будет работать автоматически.",
                     steps: [
-                        "Нажмите на значок замка слева от адреса сайта.",
-                        "Разрешите доступ к буферу обмена для этой страницы.",
-                        "Обновите страницу и попробуйте снова."
+                        "Слева от адреса нажмите значок замка (показывает красная стрелка).",
+                        "Найдите «Буфер обмена» и выберите «Разрешить».",
+                        "Обновите страницу и снова нажмите «Заполнить»."
                     ]
                 };
             }
             if (issueCode === "empty_clipboard" || issueCode === "missing_payload") {
                 return {
                     tone: "error",
-                    title: "Нет данных заявки",
-                    text: "В буфере нет JSON-данных для автозаполнения.",
+                    target: "button",
+                    title: "Нет данных для заполнения",
+                    text: "Сейчас в буфере пусто, поэтому форма не заполняется.",
                     steps: [
                         "Перейдите на quiq.kz.",
-                        "Откройте нужную заявку и нажмите кнопку АФМ (копировать данные).",
+                        "Откройте нужную заявку и нажмите кнопку АФМ (скопировать).",
                         "Вернитесь на форму и нажмите «Заполнить»."
                     ]
                 };
@@ -853,24 +943,26 @@ function observeAndBindActionButtons() {
             if (issueCode === "invalid_json") {
                 return {
                     tone: "error",
-                    title: "В буфере не данные АФМ",
-                    text: "Скопированный текст не распознан как формат заявки.",
+                    target: "button",
+                    title: "Скопирован не тот текст",
+                    text: "Нужно снова скопировать данные заявки кнопкой АФМ.",
                     steps: [
-                        "Очистите буфер (скопируйте любой короткий текст).",
-                        "Снова скопируйте данные заявки кнопкой АФМ на quiq.kz.",
-                        "Повторите автозаполнение."
+                        "Скопируйте любой короткий текст (чтобы очистить буфер).",
+                        "На quiq.kz снова нажмите кнопку АФМ в заявке.",
+                        "Вернитесь и повторите автозаполнение."
                     ]
                 };
             }
             if (issueCode === "clipboard_unavailable" || issueCode === "clipboard_error") {
                 return {
                     tone: "info",
-                    title: "Не удалось прочитать буфер",
-                    text: "Проверьте разрешения браузера и попробуйте снова.",
+                    target: "button",
+                    title: "Не получилось прочитать буфер",
+                    text: "Сделайте короткие шаги ниже и попробуйте еще раз.",
                     steps: [
                         "Обновите страницу.",
-                        "Проверьте разрешение «Буфер обмена» в настройках сайта.",
-                        "Скопируйте данные заявки заново."
+                        "Проверьте разрешение «Буфер обмена» у сайта.",
+                        "Заново скопируйте данные заявки и нажмите «Заполнить»."
                     ]
                 };
             }
@@ -889,22 +981,53 @@ function observeAndBindActionButtons() {
                 document.body.appendChild(root);
             }
 
-            const stepsHtml = (hint.steps || []).map(step => `<li>${step}</li>`).join("");
-            root.className = hint.tone;
+            let lockGuide = document.getElementById("afm-lock-guide");
+            if (!lockGuide) {
+                lockGuide = document.createElement("div");
+                lockGuide.id = "afm-lock-guide";
+                document.body.appendChild(lockGuide);
+            }
+
+            const stepsHtml = (hint.steps || []).map((step, idx) => `
+                <li>
+                    <span class="afm-step-num">${idx + 1}</span>
+                    <span>${step}</span>
+                </li>
+            `).join("");
+
+            root.className = `${hint.tone} show`;
+            root.style.display = "";
             root.innerHTML = `
-            <div class="afm-hint-arrow"></div>
+            <div class="afm-hint-arrow-up"></div>
             <div class="afm-hint-card">
-                <div class="afm-hint-title">${hint.title}</div>
-                <div class="afm-hint-text">${hint.text}</div>
+                <div class="afm-hint-head">
+                    <div class="afm-hint-badge">i</div>
+                    <div>
+                        <div class="afm-hint-title">${hint.title}</div>
+                        <div class="afm-hint-text">${hint.text}</div>
+                    </div>
+                </div>
                 ${stepsHtml ? `<ol class="afm-hint-list">${stepsHtml}</ol>` : ""}
             </div>
         `;
-            root.style.display = "block";
+            if (hint.target === "browser-lock") {
+                lockGuide.innerHTML = `
+                    <div class="afm-lock-arrow">↑</div>
+                    <div class="afm-lock-chip">Слева вверху нажмите замок и включите «Буфер обмена»</div>
+                `;
+                lockGuide.style.display = "flex";
+            } else {
+                lockGuide.style.display = "none";
+            }
         }
 
         function hideHint() {
             const root = document.getElementById("afm-user-hint");
-            if (root) root.style.display = "none";
+            if (root) {
+                root.classList.remove("show");
+            }
+            const lockGuide = document.getElementById("afm-lock-guide");
+            if (lockGuide) lockGuide.style.display = "none";
         }
 
         const btn = document.createElement("button");
