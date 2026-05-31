@@ -11,14 +11,51 @@
 /* =========================
    [0] Глобальное состояние
    ========================= */
-const AFM_STATE = { businessKey: "", initiator: "", requestId: "", afmDocId: "" };
+const AFM_STATE = { businessKey: "", initiator: "", requestId: "", afmDocId: "", operationNumber: "" };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
 const AFM_BUFFER_ISSUE = { code: "unknown", detail: "" };
+const AFM_FORM_NUMBER_KEYS = ["form.form_number", "form_number", "form.number"];
+const AFM_OPERATION_NUMBER_KEYS = ["operation.number", "operation_number", "requestId", "request_id"];
 
 function setBufferIssue(code, detail = "") {
     AFM_BUFFER_ISSUE.code = code;
     AFM_BUFFER_ISSUE.detail = String(detail || "");
+}
+
+function cleanTextValue(v) {
+    if (v === null || v === undefined) return "";
+    return String(v).trim();
+}
+
+function firstNonEmpty(...values) {
+    for (const v of values) {
+        const text = cleanTextValue(v);
+        if (text) return text;
+    }
+    return "";
+}
+
+function findJsonFieldValue(jsonFields, names) {
+    if (!Array.isArray(jsonFields) || !jsonFields.length) return "";
+    const wanted = new Set((names || []).map(n => String(n || "").trim().toLowerCase()).filter(Boolean));
+    if (!wanted.size) return "";
+
+    for (const field of jsonFields) {
+        const name = cleanTextValue(field?.Name ?? field?.name).toLowerCase();
+        if (!wanted.has(name)) continue;
+        const value = firstNonEmpty(field?.Value, field?.value);
+        if (value) return value;
+    }
+    return "";
+}
+
+function readByFieldNames(...names) {
+    for (const name of names) {
+        const value = getFieldValueByName(name);
+        if (value) return value;
+    }
+    return "";
 }
 
 /* =========================
@@ -427,15 +464,17 @@ async function getDataFromBuffer() {
 
         if (fields?.initiator) AFM_STATE.initiator = fields.initiator;
         if (fields?.json && Array.isArray(fields.json)) {
-            const bk = fields.json.find(f => f.Name === "businessKey")?.Value;
+            const bk = findJsonFieldValue(fields.json, ["businessKey"]);
             if (bk) AFM_STATE.businessKey = bk;
-            const formNumberFromJson = fields.json.find(f => f.Name === "form.form_number")?.Value;
-            if (formNumberFromJson) AFM_STATE.afmDocId = String(formNumberFromJson).trim();
-            const reqFromJson =
-                fields.json.find(f => f.Name === "requestId")?.Value ||
-                fields.json.find(f => f.Name === "operation.number")?.Value ||
-                fields.json.find(f => f.Name === "form.form_number")?.Value;
-            if (reqFromJson) AFM_STATE.requestId = String(reqFromJson).trim();
+
+            const formNumberFromJson = findJsonFieldValue(fields.json, AFM_FORM_NUMBER_KEYS);
+            if (formNumberFromJson) AFM_STATE.afmDocId = formNumberFromJson;
+
+            const operationNumberFromJson = findJsonFieldValue(fields.json, AFM_OPERATION_NUMBER_KEYS);
+            if (operationNumberFromJson) {
+                AFM_STATE.operationNumber = operationNumberFromJson;
+                AFM_STATE.requestId = operationNumberFromJson;
+            }
         }
         setBufferIssue("ok", "");
         return fields;
@@ -469,12 +508,12 @@ function getFieldValueByName(name) {
 async function getAfmDocId(retries = 5, delay = 120) {
     if (AFM_STATE.afmDocId) return AFM_STATE.afmDocId;
 
-    let v = getFieldValueByName("form.form_number");
+    let v = readByFieldNames(...AFM_FORM_NUMBER_KEYS);
     if (!v) {
         await openAccordionByHeader("форма фм-1", ["form.form_number"]);
         for (let i = 0; i < retries && !v; i++) {
             await new Promise(r => setTimeout(r, delay));
-            v = getFieldValueByName("form.form_number");
+            v = readByFieldNames(...AFM_FORM_NUMBER_KEYS);
         }
     }
 
@@ -489,21 +528,76 @@ async function getAfmDocId(retries = 5, delay = 120) {
 }
 
 async function getRequestId() {
-    let el = document.querySelector('input[name="operation.number"]');
-    if (!el || !el.value?.trim()) {
+    if (AFM_STATE.operationNumber) return AFM_STATE.operationNumber;
+
+    let v = readByFieldNames(...AFM_OPERATION_NUMBER_KEYS);
+    if (!v) {
         await openAccordionByHeader("сведения об операции", ["operation.number"]);
-        await new Promise(r => setTimeout(r, 100));
-        el = document.querySelector('input[name="operation.number"]');
+        for (let i = 0; i < 5 && !v; i++) {
+            await new Promise(r => setTimeout(r, 100));
+            v = readByFieldNames(...AFM_OPERATION_NUMBER_KEYS);
+        }
     }
-    const v = el && typeof el.value !== 'undefined' ? String(el.value).trim() : "";
-    return v || getAppIdFromUrl(); // fallback к URL, если поле скрыто/пусто
+
+    if (v) {
+        AFM_STATE.operationNumber = v;
+        AFM_STATE.requestId = v;
+        return v;
+    }
+
+    const fallback = firstNonEmpty(AFM_STATE.requestId, AFM_STATE.afmDocId, getAppIdFromUrl());
+    if (fallback) AFM_STATE.requestId = fallback;
+    return fallback; // fallback к уже известным значениям, если поле скрыто/пусто
 }
 
 async function getRequestIdForStatus() {
-    if (AFM_STATE.requestId) return AFM_STATE.requestId;
+    if (AFM_STATE.operationNumber) return AFM_STATE.operationNumber;
+    const operationNumber = await getRequestId();
+    if (operationNumber) return operationNumber;
+
     const formNumber = await getAfmDocId();
-    if (formNumber) return formNumber;
-    return await getRequestId();
+    if (formNumber) {
+        if (!AFM_STATE.requestId) AFM_STATE.requestId = formNumber;
+        return formNumber;
+    }
+
+    const urlFallback = getAppIdFromUrl();
+    if (urlFallback && !AFM_STATE.requestId) AFM_STATE.requestId = urlFallback;
+    return urlFallback;
+}
+
+async function waitForStatusIdentifiers(retries = 6, delay = 120) {
+    let afmDocId = "";
+    let operationNumber = "";
+
+    for (let i = 0; i < retries; i++) {
+        await getDataFromBuffer();
+
+        afmDocId = firstNonEmpty(AFM_STATE.afmDocId, readByFieldNames(...AFM_FORM_NUMBER_KEYS));
+        operationNumber = firstNonEmpty(AFM_STATE.operationNumber, readByFieldNames(...AFM_OPERATION_NUMBER_KEYS));
+
+        if (afmDocId && operationNumber) break;
+
+        if (!afmDocId) {
+            await openAccordionByHeader("форма фм-1", ["form.form_number"]);
+        }
+        if (!operationNumber) {
+            await openAccordionByHeader("сведения об операции", ["operation.number"]);
+        }
+
+        await new Promise(r => setTimeout(r, delay));
+    }
+
+    afmDocId = afmDocId || await getAfmDocId(2, 80) || getAppIdFromUrl();
+    operationNumber = operationNumber || await getRequestId();
+
+    if (afmDocId) AFM_STATE.afmDocId = afmDocId;
+    if (operationNumber) {
+        AFM_STATE.operationNumber = operationNumber;
+        AFM_STATE.requestId = operationNumber;
+    }
+
+    return { afmDocId, operationNumber };
 }
 
 /* =========================
@@ -696,14 +790,12 @@ function bindActionButtonOnce(btn, statusValue) {
     btn.setAttribute('afm-listener', '1');
 
     btn.addEventListener('click', async () => {
-        let afmDocId = await getAfmDocId();
-        if (!afmDocId) {
-            await getDataFromBuffer();
-            afmDocId = await getAfmDocId(2, 80);
-        }
-        const requestId = await getRequestIdForStatus();
+        const ids = await waitForStatusIdentifiers(8, 140);
+        const afmDocId = ids.afmDocId || await getAfmDocId();
+        const requestId = ids.operationNumber || await getRequestIdForStatus();
+        const operationNumber = firstNonEmpty(ids.operationNumber, AFM_STATE.operationNumber, requestId);
         const payload = {
-            requestId: AFM_STATE.requestId || requestId || "",
+            requestId: firstNonEmpty(operationNumber, AFM_STATE.requestId, afmDocId, getAppIdFromUrl()),
             AfmDocId: afmDocId || "",
             afmId: afmDocId || "",
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
