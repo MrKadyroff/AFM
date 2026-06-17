@@ -9,8 +9,7 @@
     "128": "icons/icon128.png"
   },
   "host_permissions": [
-    "https://websfm.kz/*",
-    "https://raw.githubusercontent.com/*"
+    "https://websfm.kz/*"
   ],
   "content_scripts": [
     {
