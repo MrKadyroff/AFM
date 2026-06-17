@@ -58,6 +58,23 @@ function readByFieldNames(...names) {
     return "";
 }
 
+function readByFieldNamesFromDomRich(...names) {
+    for (const name of names) {
+        const nodes = document.querySelectorAll(`[name="${name}"]`);
+        for (const el of nodes) {
+            const value = firstNonEmpty(
+                el?.value,
+                el?.getAttribute?.("value"),
+                el?.dataset?.value,
+                el?.dataset?.name,
+                el?.textContent
+            );
+            if (value) return value;
+        }
+    }
+    return "";
+}
+
 /* =========================
    [1] Хелперы DOM/React
    ========================= */
@@ -508,12 +525,20 @@ function getFieldValueByName(name) {
 async function getAfmDocId(retries = 5, delay = 120) {
     if (AFM_STATE.afmDocId) return AFM_STATE.afmDocId;
 
-    let v = readByFieldNames(...AFM_FORM_NUMBER_KEYS);
+    let v = firstNonEmpty(
+        readByFieldNames(...AFM_FORM_NUMBER_KEYS),
+        readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
+    );
     if (!v) {
         await openAccordionByHeader("форма фм-1", ["form.form_number"]);
         for (let i = 0; i < retries && !v; i++) {
             await new Promise(r => setTimeout(r, delay));
-            v = readByFieldNames(...AFM_FORM_NUMBER_KEYS);
+            await getDataFromBuffer();
+            v = firstNonEmpty(
+                AFM_STATE.afmDocId,
+                readByFieldNames(...AFM_FORM_NUMBER_KEYS),
+                readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
+            );
         }
     }
 
@@ -573,7 +598,11 @@ async function waitForStatusIdentifiers(retries = 6, delay = 120) {
     for (let i = 0; i < retries; i++) {
         await getDataFromBuffer();
 
-        afmDocId = firstNonEmpty(AFM_STATE.afmDocId, readByFieldNames(...AFM_FORM_NUMBER_KEYS));
+        afmDocId = firstNonEmpty(
+            AFM_STATE.afmDocId,
+            readByFieldNames(...AFM_FORM_NUMBER_KEYS),
+            readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
+        );
         operationNumber = firstNonEmpty(AFM_STATE.operationNumber, readByFieldNames(...AFM_OPERATION_NUMBER_KEYS));
 
         if (afmDocId && operationNumber) break;
@@ -598,6 +627,40 @@ async function waitForStatusIdentifiers(retries = 6, delay = 120) {
     }
 
     return { afmDocId, operationNumber };
+}
+
+async function waitForAfmDocIdBeforeSubmit(retries = 14, delay = 180) {
+    let afmDocId = firstNonEmpty(
+        AFM_STATE.afmDocId,
+        readByFieldNames(...AFM_FORM_NUMBER_KEYS),
+        readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
+    );
+    if (afmDocId) {
+        AFM_STATE.afmDocId = afmDocId;
+        return afmDocId;
+    }
+
+    for (let i = 0; i < retries; i++) {
+        await getDataFromBuffer();
+        await openAccordionByHeader("форма фм-1", ["form.form_number"]);
+        await new Promise(r => setTimeout(r, delay));
+
+        afmDocId = firstNonEmpty(
+            AFM_STATE.afmDocId,
+            readByFieldNames(...AFM_FORM_NUMBER_KEYS),
+            readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
+        );
+        if (afmDocId) break;
+    }
+
+    if (afmDocId) {
+        AFM_STATE.afmDocId = afmDocId;
+        return afmDocId;
+    }
+
+    const fallback = getAppIdFromUrl();
+    if (fallback) AFM_STATE.afmDocId = fallback;
+    return fallback;
 }
 
 /* =========================
@@ -790,8 +853,9 @@ function bindActionButtonOnce(btn, statusValue) {
     btn.setAttribute('afm-listener', '1');
 
     btn.addEventListener('click', async () => {
+        const strictAfmDocId = await waitForAfmDocIdBeforeSubmit(18, 160);
         const ids = await waitForStatusIdentifiers(8, 140);
-        const afmDocId = ids.afmDocId || await getAfmDocId();
+        const afmDocId = strictAfmDocId || ids.afmDocId || await getAfmDocId();
         const requestId = ids.operationNumber || await getRequestIdForStatus();
         const operationNumber = firstNonEmpty(ids.operationNumber, AFM_STATE.operationNumber, requestId);
         const payload = {
