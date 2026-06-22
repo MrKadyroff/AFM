@@ -484,8 +484,9 @@ async function getDataFromBuffer() {
             const bk = findJsonFieldValue(fields.json, ["businessKey"]);
             if (bk) AFM_STATE.businessKey = bk;
 
-            const formNumberFromJson = findJsonFieldValue(fields.json, AFM_FORM_NUMBER_KEYS);
-            if (formNumberFromJson) AFM_STATE.afmDocId = formNumberFromJson;
+            // Сбрасываем afmDocId при каждом новом JSON из буфера — иначе старый ID
+            // от предыдущей формы мог бы «прилипнуть» если в новом JSON нет form_number
+            AFM_STATE.afmDocId = findJsonFieldValue(fields.json, AFM_FORM_NUMBER_KEYS);
 
             const operationNumberFromJson = findJsonFieldValue(fields.json, AFM_OPERATION_NUMBER_KEYS);
             if (operationNumberFromJson) {
@@ -518,6 +519,15 @@ function getFieldValueByName(name) {
         }
         const attrV = (el.getAttribute("value") || "").trim();
         if (attrV) return attrV;
+        // Для disabled-инпутов react-hook-form не синхронизирует el.value с internal state.
+        // Читаем напрямую из React fiber memoizedProps.
+        const fiberKey = Object.keys(el).find(k =>
+            k.startsWith("__reactFiber") || k.startsWith("__reactInternalInstance")
+        );
+        if (fiberKey) {
+            const reactVal = String(el[fiberKey]?.memoizedProps?.value ?? "").trim();
+            if (reactVal) return reactVal;
+        }
     }
     return "";
 }

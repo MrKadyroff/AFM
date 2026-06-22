@@ -4,8 +4,7 @@
     "type": "module",
     "scripts": {
         "obfuscate": "node scripts/obfuscate.mjs",
-        "build:ext": "npm run obfuscate && npm --prefix chrome-ext-afm run build",
-        "ext:ready": "npm run build:ext && node scripts/make-extension-ready.mjs"
+        "build:ext": "npm run obfuscate && npm --prefix afm-ext run build"
     },
     "devDependencies": {
         "javascript-obfuscator": "^4.0.2"
