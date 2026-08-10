@@ -36,6 +36,28 @@ function firstNonEmpty(...values) {
     return "";
 }
 
+// id заявки (GUID из URL) и id опций селектов не должны попадать в AfmDocId:
+// селект рендерится как button[name] + скрытый input[name], и в скрытом инпуте лежит id опции.
+const AFM_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isLikelyFormNumber(v) {
+    const text = cleanTextValue(v);
+    if (!text) return false;
+    if (AFM_UUID_RE.test(text)) return false;
+    if (text.length > 32) return false;
+    if (text === getAppIdFromUrl()) return false;
+    return true;
+}
+
+/** Первый кандидат, который похож на номер формы, а не на id. */
+function pickFormNumber(...values) {
+    for (const v of values) {
+        const text = cleanTextValue(v);
+        if (isLikelyFormNumber(text)) return text;
+    }
+    return "";
+}
+
 function findJsonFieldValue(jsonFields, names) {
     if (!Array.isArray(jsonFields) || !jsonFields.length) return "";
     const wanted = new Set((names || []).map(n => String(n || "").trim().toLowerCase()).filter(Boolean));
@@ -486,7 +508,7 @@ async function getDataFromBuffer() {
 
             // Сбрасываем afmDocId при каждом новом JSON из буфера — иначе старый ID
             // от предыдущей формы мог бы «прилипнуть» если в новом JSON нет form_number
-            AFM_STATE.afmDocId = findJsonFieldValue(fields.json, AFM_FORM_NUMBER_KEYS);
+            AFM_STATE.afmDocId = pickFormNumber(findJsonFieldValue(fields.json, AFM_FORM_NUMBER_KEYS));
 
             const operationNumberFromJson = findJsonFieldValue(fields.json, AFM_OPERATION_NUMBER_KEYS);
             if (operationNumberFromJson) {
@@ -535,7 +557,7 @@ function getFieldValueByName(name) {
 async function getAfmDocId(retries = 5, delay = 120) {
     if (AFM_STATE.afmDocId) return AFM_STATE.afmDocId;
 
-    let v = firstNonEmpty(
+    let v = pickFormNumber(
         readByFieldNames(...AFM_FORM_NUMBER_KEYS),
         readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
     );
@@ -544,7 +566,7 @@ async function getAfmDocId(retries = 5, delay = 120) {
         for (let i = 0; i < retries && !v; i++) {
             await new Promise(r => setTimeout(r, delay));
             await getDataFromBuffer();
-            v = firstNonEmpty(
+            v = pickFormNumber(
                 AFM_STATE.afmDocId,
                 readByFieldNames(...AFM_FORM_NUMBER_KEYS),
                 readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
@@ -557,9 +579,10 @@ async function getAfmDocId(retries = 5, delay = 120) {
         return v;
     }
 
-    const fallback = getAppIdFromUrl();
-    if (fallback) AFM_STATE.afmDocId = fallback;
-    return fallback; // fallback к URL, если поле скрыто/пусто
+    // Раньше сюда падал id заявки из URL и кэшировался в AFM_STATE.afmDocId,
+    // после чего все последующие чтения возвращали id вместо form_number.
+    console.warn("[AFM] form_number не прочитан, AfmDocId уйдёт пустым");
+    return "";
 }
 
 async function getRequestId() {
@@ -608,7 +631,7 @@ async function waitForStatusIdentifiers(retries = 6, delay = 120) {
     for (let i = 0; i < retries; i++) {
         await getDataFromBuffer();
 
-        afmDocId = firstNonEmpty(
+        afmDocId = pickFormNumber(
             AFM_STATE.afmDocId,
             readByFieldNames(...AFM_FORM_NUMBER_KEYS),
             readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
@@ -627,7 +650,7 @@ async function waitForStatusIdentifiers(retries = 6, delay = 120) {
         await new Promise(r => setTimeout(r, delay));
     }
 
-    afmDocId = afmDocId || await getAfmDocId(2, 80) || getAppIdFromUrl();
+    afmDocId = afmDocId || await getAfmDocId(2, 80);
     operationNumber = operationNumber || await getRequestId();
 
     if (afmDocId) AFM_STATE.afmDocId = afmDocId;
@@ -640,7 +663,7 @@ async function waitForStatusIdentifiers(retries = 6, delay = 120) {
 }
 
 async function waitForAfmDocIdBeforeSubmit(retries = 14, delay = 180) {
-    let afmDocId = firstNonEmpty(
+    let afmDocId = pickFormNumber(
         AFM_STATE.afmDocId,
         readByFieldNames(...AFM_FORM_NUMBER_KEYS),
         readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
@@ -655,7 +678,7 @@ async function waitForAfmDocIdBeforeSubmit(retries = 14, delay = 180) {
         await openAccordionByHeader("форма фм-1", ["form.form_number"]);
         await new Promise(r => setTimeout(r, delay));
 
-        afmDocId = firstNonEmpty(
+        afmDocId = pickFormNumber(
             AFM_STATE.afmDocId,
             readByFieldNames(...AFM_FORM_NUMBER_KEYS),
             readByFieldNamesFromDomRich(...AFM_FORM_NUMBER_KEYS)
@@ -668,9 +691,8 @@ async function waitForAfmDocIdBeforeSubmit(retries = 14, delay = 180) {
         return afmDocId;
     }
 
-    const fallback = getAppIdFromUrl();
-    if (fallback) AFM_STATE.afmDocId = fallback;
-    return fallback;
+    // Без фолбэка на URL: id заявки уезжает отдельным полем afmId.
+    return "";
 }
 
 /* =========================
@@ -865,17 +887,20 @@ function bindActionButtonOnce(btn, statusValue) {
     btn.addEventListener('click', async () => {
         const strictAfmDocId = await waitForAfmDocIdBeforeSubmit(18, 160);
         const ids = await waitForStatusIdentifiers(8, 140);
-        const afmDocId = strictAfmDocId || ids.afmDocId || await getAfmDocId();
+        let afmDocId = pickFormNumber(strictAfmDocId, ids.afmDocId);
+        if (!afmDocId) afmDocId = pickFormNumber(await getAfmDocId());
         const requestId = ids.operationNumber || await getRequestIdForStatus();
         const operationNumber = firstNonEmpty(ids.operationNumber, AFM_STATE.operationNumber, requestId);
         const payload = {
             requestId: firstNonEmpty(operationNumber, AFM_STATE.requestId, afmDocId, getAppIdFromUrl()),
+            // AfmDocId — только номер формы; id заявки из URL идёт отдельно в afmId.
             AfmDocId: afmDocId || "",
-            afmId: afmDocId || "",
+            afmId: getAppIdFromUrl(),
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
             subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
             saveUserIp: "", subscribeUserIp: "", status: statusValue
         };
+        console.log("[AFM] afmStatus payload", payload);
         try {
             const resp = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
