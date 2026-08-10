@@ -172,6 +172,41 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     return false;
 }
 
+/* ---------- Определение языка интерфейса ---------- */
+// Все селекторы полей и заголовки аккордеонов завязаны на русскую локаль,
+// поэтому на казахской версии заполнение не находит секции — предупреждаем пользователя.
+const AFM_RU_MARKERS = ["форма фм-1", "сведения об операции", "участники"];
+// Буквы, которых нет в русском алфавите — надёжный признак казахской локали.
+const AFM_KK_LETTERS = /[әғқңөұүһі]/;
+
+const AFM_LANG_LABEL_RE = /^(рус|русский|ru|қаз|каз|kk|kz)\.?$/i;
+
+/** Переключатель языка в шапке. Хэш в классе (HeaderMenu_language-toggle__xxxxx)
+ *  меняется при пересборке фронта, поэтому ищем по подстроке класса, а не целиком. */
+function findLanguageToggleEl() {
+    const byClass = Array.from(document.querySelectorAll('[class*="language-toggle"], [class*="language"], [class*="lang-"]'))
+        .filter(el => el.offsetParent !== null && el.getBoundingClientRect().width > 0);
+    const labeled = byClass.find(el => AFM_LANG_LABEL_RE.test((el.textContent || "").trim()));
+    if (labeled) return labeled;
+    if (byClass.length) return byClass[byClass.length - 1];
+
+    return Array.from(document.querySelectorAll("div, span, a, button")).find(el =>
+        el.offsetParent !== null
+        && AFM_LANG_LABEL_RE.test((el.textContent || "").trim())
+        && el.getBoundingClientRect().width > 0
+    ) || null;
+}
+
+function detectUiLanguage() {
+    const texts = Array.from(document.querySelectorAll("p"))
+        .map(p => p.textContent.trim().toLowerCase())
+        .filter(Boolean);
+    if (!texts.length) return "unknown";
+    if (AFM_RU_MARKERS.some(m => texts.some(t => t.includes(m)))) return "ru";
+    if (texts.some(t => AFM_KK_LETTERS.test(t))) return "kk";
+    return "unknown";
+}
+
 async function realUserType(input, text, delay = 10) {
     input.focus();
     input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -1100,11 +1135,132 @@ function observeAndBindActionButtons() {
                 0%, 100% { transform: translateY(0); }
                 50% { transform: translateY(-4px); }
             }
+
+            /* Указатель на переключатель языка в шапке сайта */
+            #afm-lang-pointer {
+                position: fixed;
+                z-index: 10002;
+                display: none;
+                pointer-events: none;
+                font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+            }
+            #afm-lang-pointer .afm-lang-ring {
+                position: fixed;
+                border-radius: 10px;
+                border: 2px solid #ef4444;
+                box-shadow: 0 0 0 4px rgba(239, 68, 68, .22), 0 0 0 9999px rgba(9, 12, 20, .45);
+                animation: afm-lang-pulse 1.2s ease-in-out infinite;
+            }
+            #afm-lang-pointer .afm-lang-callout {
+                position: fixed;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 2px;
+            }
+            #afm-lang-pointer .afm-lang-arrow {
+                font-size: 26px;
+                line-height: 1;
+                color: #ef4444;
+                animation: afm-lock-bounce .9s ease-in-out infinite;
+                text-shadow: 0 8px 24px rgba(0, 0, 0, .42);
+            }
+            #afm-lang-pointer .afm-lang-chip {
+                max-width: min(300px, 70vw);
+                padding: 8px 12px;
+                border-radius: 12px;
+                font-size: 13px;
+                font-weight: 600;
+                line-height: 1.35;
+                text-align: center;
+                color: #fff1f2;
+                background: rgba(127, 29, 29, .92);
+                border: 1px solid rgba(248, 113, 113, .64);
+                box-shadow: 0 12px 26px rgba(0, 0, 0, .34);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+            }
+            @keyframes afm-lang-pulse {
+                0%, 100% { box-shadow: 0 0 0 4px rgba(239, 68, 68, .22), 0 0 0 9999px rgba(9, 12, 20, .45); }
+                50% { box-shadow: 0 0 0 9px rgba(239, 68, 68, .10), 0 0 0 9999px rgba(9, 12, 20, .45); }
+            }
         `;
             document.head.appendChild(s);
         }
 
+        let _afmLangPointerTimer = null;
+
+        function showLanguagePointer() {
+            ensureHintStyles();
+
+            let root = document.getElementById("afm-lang-pointer");
+            if (!root) {
+                root = document.createElement("div");
+                root.id = "afm-lang-pointer";
+                root.innerHTML = `
+                    <div class="afm-lang-ring"></div>
+                    <div class="afm-lang-callout">
+                        <div class="afm-lang-arrow">↑</div>
+                        <div class="afm-lang-chip">Нажмите сюда и выберите «Рус»</div>
+                    </div>
+                `;
+                document.body.appendChild(root);
+            }
+
+            // Шапка — часть SPA и может перерисоваться, поэтому позицию пересчитываем по таймеру.
+            const place = () => {
+                const target = findLanguageToggleEl();
+                const rect = target?.getBoundingClientRect();
+                if (!rect || !rect.width || !rect.height) {
+                    root.style.display = "none";
+                    return;
+                }
+                root.style.display = "block";
+
+                const pad = 6;
+                const ring = root.querySelector(".afm-lang-ring");
+                ring.style.left = `${rect.left - pad}px`;
+                ring.style.top = `${rect.top - pad}px`;
+                ring.style.width = `${rect.width + pad * 2}px`;
+                ring.style.height = `${rect.height + pad * 2}px`;
+
+                const callout = root.querySelector(".afm-lang-callout");
+                callout.style.top = `${rect.bottom + 10}px`;
+                const width = callout.offsetWidth || 220;
+                const left = Math.min(
+                    Math.max(8, rect.left + rect.width / 2 - width / 2),
+                    Math.max(8, window.innerWidth - width - 8)
+                );
+                callout.style.left = `${left}px`;
+            };
+
+            place();
+            if (!_afmLangPointerTimer) _afmLangPointerTimer = setInterval(place, 400);
+        }
+
+        function hideLanguagePointer() {
+            if (_afmLangPointerTimer) {
+                clearInterval(_afmLangPointerTimer);
+                _afmLangPointerTimer = null;
+            }
+            const root = document.getElementById("afm-lang-pointer");
+            if (root) root.style.display = "none";
+        }
+
         function getHintForIssue(issueCode) {
+            if (issueCode === "kk_language") {
+                return {
+                    tone: "warn",
+                    target: "language-toggle",
+                    title: "Переключите сайт на русский язык",
+                    text: "Сейчас интерфейс на казахском — автозаполнение не найдёт поля формы.",
+                    steps: [
+                        "Нажмите на подсвеченный переключатель языка в шапке.",
+                        "Дождитесь, пока страница перерисуется на русском.",
+                        "Нажмите «Заполнить»."
+                    ]
+                };
+            }
             if (issueCode === "clipboard_blocked") {
                 return {
                     tone: "warn",
@@ -1210,15 +1366,26 @@ function observeAndBindActionButtons() {
             } else {
                 lockGuide.style.display = "none";
             }
+
+            if (hint.target === "language-toggle") {
+                // Затемнение рисует сам указатель, поэтому карточку с шагами поднимаем над ним.
+                root.style.zIndex = "10003";
+                showLanguagePointer();
+            } else {
+                root.style.zIndex = "";
+                hideLanguagePointer();
+            }
         }
 
         function hideHint() {
             const root = document.getElementById("afm-user-hint");
             if (root) {
                 root.classList.remove("show");
+                root.style.zIndex = "";
             }
             const lockGuide = document.getElementById("afm-lock-guide");
             if (lockGuide) lockGuide.style.display = "none";
+            hideLanguagePointer();
         }
 
         const btn = document.createElement("button");
@@ -1250,8 +1417,15 @@ function observeAndBindActionButtons() {
 
         observeAndBindActionButtons();
 
-        // Подсказка по буферу
+        // Подсказка по языку и буферу
         setInterval(async () => {
+            // Казахская локаль важнее проблем с буфером: без русского не сработает ничего.
+            if (detectUiLanguage() === "kk") {
+                setButtonState("disabled", "Переключите язык на русский");
+                showHintForIssue("kk_language");
+                return;
+            }
+
             const fields = await getDataFromBuffer();
             if (fields == null) {
                 setButtonState("disabled", "Нет данных. Смотрите подсказку ниже.");
@@ -1263,6 +1437,12 @@ function observeAndBindActionButtons() {
         }, 1500);
 
         btn.onclick = async () => {
+            if (detectUiLanguage() === "kk") {
+                setButtonState("disabled", "Переключите язык на русский");
+                showHintForIssue("kk_language");
+                return;
+            }
+
             setButtonState("process", "Заполняется...");
             hideHint();
             showOverlay("Идёт автозаполнение формы. Пожалуйста, не кликайте и не используйте клавиатуру.");
