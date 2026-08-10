@@ -1329,7 +1329,7 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "error",
                     target: "button",
-                    title: "Скопировано не то",
+                    title: "Скопируйте данные с Quiq.kz",
                     image: AFM_COPY_BTN_IMG,
                     steps: [
                         "Нажмите эту кнопку в заявке на quiq.kz",
