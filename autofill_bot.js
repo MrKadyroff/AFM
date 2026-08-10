@@ -1060,6 +1060,15 @@ function observeAndBindActionButtons() {
                 font-size: 13px;
                 opacity: .92;
             }
+            #afm-user-hint .afm-hint-img {
+                display: block;
+                width: 190px;
+                max-width: 70%;
+                margin: 10px 0 0;
+                border-radius: 7px;
+                border: 1px solid rgba(255, 255, 255, .28);
+                box-shadow: 0 6px 14px rgba(0, 0, 0, .28);
+            }
             #afm-user-hint .afm-hint-list {
                 margin: 10px 0 0;
                 padding: 0;
@@ -1277,6 +1286,10 @@ function observeAndBindActionButtons() {
             if (root) root.style.display = "none";
         }
 
+        // Скриншот кнопки «Скопировать данные» с quiq.kz (инлайн, ~1.5 КБ):
+        // скрипт грузится в контекст страницы и файлы расширения ему недоступны.
+        const AFM_COPY_BTN_IMG = "data:image/png;base64,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";
+
         function getHintForIssue(issueCode) {
             if (issueCode === "kk_language") {
                 return {
@@ -1305,8 +1318,9 @@ function observeAndBindActionButtons() {
                     tone: "error",
                     target: "button",
                     title: "Данные заявки не скопированы",
+                    image: AFM_COPY_BTN_IMG,
                     steps: [
-                        "Откройте заявку на quiq.kz и нажмите «АФМ»",
+                        "Нажмите эту кнопку в заявке на quiq.kz",
                         "Вернитесь сюда и нажмите «Заполнить»"
                     ]
                 };
@@ -1317,7 +1331,7 @@ function observeAndBindActionButtons() {
                     target: "button",
                     title: "Скопировано не то",
                     steps: [
-                        "На quiq.kz нажмите «АФМ» в заявке",
+                        "На quiq.kz нажмите «Скопировать данные» в заявке",
                         "Вернитесь сюда и нажмите «Заполнить»"
                     ]
                 };
@@ -1374,6 +1388,7 @@ function observeAndBindActionButtons() {
                         ${hint.text ? `<div class="afm-hint-text">${hint.text}</div>` : ""}
                     </div>
                 </div>
+                ${hint.image ? `<img class="afm-hint-img" src="${hint.image}" alt="Кнопка «Скопировать данные»">` : ""}
                 ${stepsHtml ? `<ol class="afm-hint-list">${stepsHtml}</ol>` : ""}
             </div>
         `;
