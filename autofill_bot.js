@@ -1189,9 +1189,39 @@ function observeAndBindActionButtons() {
         }
 
         let _afmLangPointerTimer = null;
+        // После клика указатель нужно убрать: затемнение и плашка перекрывают
+        // и сам переключатель, и выпадающий список с языками.
+        let _afmLangPointerMutedUntil = 0;
+        let _afmLangDismissBound = false;
+
+        function isLanguagePointerMuted() {
+            return Date.now() < _afmLangPointerMutedUntil;
+        }
+
+        function muteLanguagePointer(ms = 8000) {
+            _afmLangPointerMutedUntil = Date.now() + ms;
+            hideLanguagePointer();
+            const card = document.getElementById("afm-user-hint");
+            if (card) {
+                card.classList.remove("show");
+                card.style.zIndex = "";
+            }
+        }
+
+        function bindLanguagePointerDismiss() {
+            if (_afmLangDismissBound) return;
+            _afmLangDismissBound = true;
+            // Capture, чтобы успеть скрыться до того, как сайт отработает свой клик.
+            document.addEventListener("click", () => {
+                const root = document.getElementById("afm-lang-pointer");
+                if (root && root.style.display !== "none") muteLanguagePointer();
+            }, true);
+        }
 
         function showLanguagePointer() {
+            if (isLanguagePointerMuted()) return;
             ensureHintStyles();
+            bindLanguagePointerDismiss();
 
             let root = document.getElementById("afm-lang-pointer");
             if (!root) {
@@ -1252,12 +1282,9 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "warn",
                     target: "language-toggle",
-                    title: "Переключите сайт на русский язык",
-                    text: "Сейчас интерфейс на казахском — автозаполнение не найдёт поля формы.",
+                    title: "Сайт на казахском",
                     steps: [
-                        "Нажмите на подсвеченный переключатель языка в шапке.",
-                        "Дождитесь, пока страница перерисуется на русском.",
-                        "Нажмите «Заполнить»."
+                        "Нажмите подсвеченный переключатель — «Рус»"
                     ]
                 };
             }
@@ -1265,12 +1292,11 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "warn",
                     target: "browser-lock",
-                    title: "Дайте доступ к буферу обмена",
-                    text: "Это нужно сделать один раз, дальше все будет работать автоматически.",
+                    title: "Нет доступа к буферу обмена",
                     steps: [
-                        "Слева от адреса нажмите значок замка (показывает красная стрелка).",
-                        "Найдите «Буфер обмена» и выберите «Разрешить».",
-                        "Обновите страницу и снова нажмите «Заполнить»."
+                        "Нажмите замок слева от адреса",
+                        "«Буфер обмена» → «Разрешить»",
+                        "Обновите страницу"
                     ]
                 };
             }
@@ -1278,12 +1304,10 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "error",
                     target: "button",
-                    title: "Нет данных для заполнения",
-                    text: "Сейчас в буфере пусто, поэтому форма не заполняется.",
+                    title: "Данные заявки не скопированы",
                     steps: [
-                        "Перейдите на quiq.kz.",
-                        "Откройте нужную заявку и нажмите кнопку АФМ (скопировать).",
-                        "Вернитесь на форму и нажмите «Заполнить»."
+                        "Откройте заявку на quiq.kz и нажмите «АФМ»",
+                        "Вернитесь сюда и нажмите «Заполнить»"
                     ]
                 };
             }
@@ -1291,12 +1315,10 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "error",
                     target: "button",
-                    title: "Скопирован не тот текст",
-                    text: "Нужно снова скопировать данные заявки кнопкой АФМ.",
+                    title: "Скопировано не то",
                     steps: [
-                        "Скопируйте любой короткий текст (чтобы очистить буфер).",
-                        "На quiq.kz снова нажмите кнопку АФМ в заявке.",
-                        "Вернитесь и повторите автозаполнение."
+                        "На quiq.kz нажмите «АФМ» в заявке",
+                        "Вернитесь сюда и нажмите «Заполнить»"
                     ]
                 };
             }
@@ -1304,12 +1326,10 @@ function observeAndBindActionButtons() {
                 return {
                     tone: "info",
                     target: "button",
-                    title: "Не получилось прочитать буфер",
-                    text: "Сделайте короткие шаги ниже и попробуйте еще раз.",
+                    title: "Не читается буфер обмена",
                     steps: [
-                        "Обновите страницу.",
-                        "Проверьте разрешение «Буфер обмена» у сайта.",
-                        "Заново скопируйте данные заявки и нажмите «Заполнить»."
+                        "Обновите страницу",
+                        "Проверьте разрешение «Буфер обмена»"
                     ]
                 };
             }
@@ -1351,7 +1371,7 @@ function observeAndBindActionButtons() {
                     <div class="afm-hint-badge">i</div>
                     <div>
                         <div class="afm-hint-title">${hint.title}</div>
-                        <div class="afm-hint-text">${hint.text}</div>
+                        ${hint.text ? `<div class="afm-hint-text">${hint.text}</div>` : ""}
                     </div>
                 </div>
                 ${stepsHtml ? `<ol class="afm-hint-list">${stepsHtml}</ol>` : ""}
@@ -1360,7 +1380,7 @@ function observeAndBindActionButtons() {
             if (hint.target === "browser-lock") {
                 lockGuide.innerHTML = `
                     <div class="afm-lock-arrow">↑</div>
-                    <div class="afm-lock-chip">Слева вверху нажмите замок и включите «Буфер обмена»</div>
+                    <div class="afm-lock-chip">Замок → «Буфер обмена» → «Разрешить»</div>
                 `;
                 lockGuide.style.display = "flex";
             } else {
@@ -1422,13 +1442,14 @@ function observeAndBindActionButtons() {
             // Казахская локаль важнее проблем с буфером: без русского не сработает ничего.
             if (detectUiLanguage() === "kk") {
                 setButtonState("disabled", "Переключите язык на русский");
-                showHintForIssue("kk_language");
+                // Пока пользователь возится с переключателем — не мешаем ему подсказкой.
+                if (!isLanguagePointerMuted()) showHintForIssue("kk_language");
                 return;
             }
 
             const fields = await getDataFromBuffer();
             if (fields == null) {
-                setButtonState("disabled", "Нет данных. Смотрите подсказку ниже.");
+                setButtonState("disabled", "Данные не скопированы");
                 showHintForIssue(AFM_BUFFER_ISSUE.code);
             } else {
                 setButtonState("active", "Заполнить");
@@ -1439,6 +1460,8 @@ function observeAndBindActionButtons() {
         btn.onclick = async () => {
             if (detectUiLanguage() === "kk") {
                 setButtonState("disabled", "Переключите язык на русский");
+                // Нажали «Заполнить» — значит подсказка нужна прямо сейчас, снимаем паузу.
+                _afmLangPointerMutedUntil = 0;
                 showHintForIssue("kk_language");
                 return;
             }
