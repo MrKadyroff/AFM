@@ -1330,8 +1330,9 @@ function observeAndBindActionButtons() {
                     tone: "error",
                     target: "button",
                     title: "Скопировано не то",
+                    image: AFM_COPY_BTN_IMG,
                     steps: [
-                        "На quiq.kz нажмите «Скопировать данные» в заявке",
+                        "Нажмите эту кнопку в заявке на quiq.kz",
                         "Вернитесь сюда и нажмите «Заполнить»"
                     ]
                 };
@@ -1449,6 +1450,11 @@ function observeAndBindActionButtons() {
             btn.innerText = text || cfg.text;
             btn.style.cssText = baseBtnStyle + cfg.style;
         }
+
+        // Для проверки подсказок из консоли:
+        // __afmHint("missing_payload") / "invalid_json" / "kk_language" / "clipboard_blocked"
+        window.__afmHint = showHintForIssue;
+        window.__afmHintOff = hideHint;
 
         observeAndBindActionButtons();
 
