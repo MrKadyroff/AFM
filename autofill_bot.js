@@ -988,6 +988,181 @@ function observeAndBindActionButtons() {
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
+/* ==================================================
+   [4.1] Блокировка удаления уже отправленной заявки
+   ================================================== */
+// Статус читаем со страницы websfm: если заявка уже ушла в АФМ — удалять нельзя.
+// Разблокировать удаление может только админ, введя PIN (действует 15 минут).
+const AFM_ADMIN_PIN = "9090";
+const AFM_ADMIN_UNLOCK_KEY = "afm_admin_unlock_until";
+const AFM_ADMIN_UNLOCK_MS = 1 * 60 * 1000;
+// Подписи статуса, при которых заявка считается отправленной.
+const AFM_SENT_STATUS_RE = /(отправлен|подписан|зарегистрирован|принят|на рассмотрении)/;
+
+function isAdminUnlocked() {
+    try {
+        const until = Number(localStorage.getItem(AFM_ADMIN_UNLOCK_KEY) || 0);
+        return Number.isFinite(until) && Date.now() < until;
+    } catch { return false; }
+}
+
+function unlockAdmin() {
+    try { localStorage.setItem(AFM_ADMIN_UNLOCK_KEY, String(Date.now() + AFM_ADMIN_UNLOCK_MS)); } catch { }
+}
+
+// Текст статуса заявки со страницы. Разметку websfm не фиксируем жёстко:
+// ищем узел с подписью «Статус» и берём значение из него самого или из соседа.
+function readFormStatusText() {
+    const nodes = document.querySelectorAll("div, span, p, td, th, li, label, dt, dd, h1, h2, h3, h4");
+    for (const el of nodes) {
+        if (el.querySelector("div, span, p, td, li")) continue; // только листовые узлы
+        const t = normAfmLabel(el.textContent);
+        if (!t || t.length > 160) continue;
+        if (!/^статус\b/.test(t)) continue;
+        const inline = t.replace(/^статус\s*/, "").trim();
+        if (inline) return inline;
+        const sibling = el.nextElementSibling || el.parentElement?.nextElementSibling;
+        const st = normAfmLabel(sibling?.textContent);
+        if (st && st.length <= 160) return st;
+    }
+    return "";
+}
+
+function isApplicationSent() {
+    return AFM_SENT_STATUS_RE.test(readFormStatusText());
+}
+
+function isDeleteLabel(text) {
+    const t = normAfmLabel(text);
+    if (!t || t.length > 40) return false;
+    return /\bудал/.test(t) || /\bdelete\b|\bremove\b/.test(t);
+}
+
+// Кнопка удаления под курсором: сам элемент или ближайший родитель-кнопка.
+function findDeleteControl(target) {
+    const selector = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+    let el = target instanceof Element ? target.closest(selector) : null;
+    if (!el) return null;
+    const label = el.tagName === "INPUT" ? el.value : (el.innerText || el.textContent);
+    const isDelete = isDeleteLabel(label)
+        || isDeleteLabel(el.getAttribute("aria-label"))
+        || isDeleteLabel(el.getAttribute("title"))
+        || isDeleteLabel(el.getAttribute("name"))
+        || isDeleteLabel(el.dataset?.action);
+    return isDelete ? el : null;
+}
+
+function ensureDeleteGuardStyles() {
+    if (document.getElementById("afm-delete-guard-style")) return;
+    const s = document.createElement("style");
+    s.id = "afm-delete-guard-style";
+    s.textContent = `
+        #afm-delete-guard {
+            position: fixed; inset: 0; z-index: 100000; display: flex;
+            align-items: center; justify-content: center;
+            background: rgba(9, 12, 20, .52); backdrop-filter: blur(4px);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        }
+        #afm-delete-guard .afm-dg-card {
+            width: min(420px, 92vw); border-radius: 18px; padding: 20px;
+            color: #fff; background: linear-gradient(135deg, rgba(127, 29, 29, .96), rgba(69, 26, 15, .96));
+            border: 1px solid rgba(248, 113, 113, .5); box-shadow: 0 18px 40px rgba(0, 0, 0, .38);
+        }
+        #afm-delete-guard .afm-dg-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+        #afm-delete-guard .afm-dg-text { font-size: 13px; line-height: 1.45; opacity: .92; }
+        #afm-delete-guard input {
+            width: 100%; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, .28); background: rgba(0, 0, 0, .25);
+            color: #fff; font-size: 15px; letter-spacing: 3px; box-sizing: border-box;
+        }
+        #afm-delete-guard .afm-dg-err { min-height: 16px; margin-top: 6px; font-size: 12px; color: #fecaca; }
+        #afm-delete-guard .afm-dg-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+        #afm-delete-guard button {
+            padding: 9px 14px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .24);
+            background: rgba(255, 255, 255, .12); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        #afm-delete-guard button.afm-dg-primary { background: #ef4444; border-color: #ef4444; }
+    `;
+    document.head.appendChild(s);
+}
+
+// Окно с отказом и полем для PIN администратора.
+function showDeleteBlockedModal(onUnlocked) {
+    ensureDeleteGuardStyles();
+    document.getElementById("afm-delete-guard")?.remove();
+
+    const root = document.createElement("div");
+    root.id = "afm-delete-guard";
+    root.innerHTML = `
+        <div class="afm-dg-card">
+            <div class="afm-dg-title">Удаление запрещено</div>
+            <div class="afm-dg-text">Заявка уже отправлена в АФМ, поэтому удалить её нельзя.
+            Если удаление всё же необходимо — введите код администратора.</div>
+            <input type="password" inputmode="numeric" autocomplete="off" placeholder="Код администратора">
+            <div class="afm-dg-err"></div>
+            <div class="afm-dg-row">
+                <button data-afm-dg="cancel">Закрыть</button>
+                <button class="afm-dg-primary" data-afm-dg="ok">Разблокировать</button>
+            </div>
+        </div>`;
+    document.body.appendChild(root);
+
+    const input = root.querySelector("input");
+    const err = root.querySelector(".afm-dg-err");
+    const close = () => root.remove();
+
+    const submit = () => {
+        if (input.value.trim() !== AFM_ADMIN_PIN) {
+            err.textContent = "Неверный код";
+            input.value = "";
+            input.focus();
+            return;
+        }
+        unlockAdmin();
+        close();
+        onUnlocked && onUnlocked();
+    };
+
+    root.addEventListener("click", e => {
+        const act = e.target?.getAttribute?.("data-afm-dg");
+        if (act === "cancel" || e.target === root) close();
+        if (act === "ok") submit();
+    });
+    input.addEventListener("keydown", e => {
+        e.stopPropagation();
+        if (e.key === "Enter") submit();
+        if (e.key === "Escape") close();
+    });
+    setTimeout(() => input.focus(), 0);
+}
+
+function installDeleteGuard() {
+    let replaying = false;
+
+    const guard = e => {
+        if (replaying) return;
+        if (isAdminUnlocked()) return;
+        const btn = findDeleteControl(e.target);
+        if (!btn) return;
+        if (!isApplicationSent()) return;
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        // Модалку показываем один раз — по клику, а не на каждом pointerdown.
+        if (e.type !== "click") return;
+        showDeleteBlockedModal(() => {
+            // После успешного PIN повторяем исходное нажатие уже без блокировки.
+            replaying = true;
+            try { btn.click(); } finally { replaying = false; }
+        });
+    };
+
+    ["pointerdown", "mousedown", "mouseup", "click"].forEach(type => {
+        window.addEventListener(type, guard, true);
+    });
+}
+
 /* =========================
    [5] Главный запуск (IIFE)
    ========================= */
@@ -1489,8 +1664,14 @@ function observeAndBindActionButtons() {
         // __afmHint("missing_payload") / "invalid_json" / "kk_language" / "clipboard_blocked"
         window.__afmHint = showHintForIssue;
         window.__afmHintOff = hideHint;
+        // Отладка блокировки удаления: __afmStatus() — что прочитали со страницы,
+        // __afmSent() — считается ли заявка отправленной, __afmAdminOff() — сбросить PIN-доступ.
+        window.__afmStatus = readFormStatusText;
+        window.__afmSent = isApplicationSent;
+        window.__afmAdminOff = () => localStorage.removeItem(AFM_ADMIN_UNLOCK_KEY);
 
         observeAndBindActionButtons();
+        installDeleteGuard();
 
         // Подсказка по языку и буферу
         setInterval(async () => {
