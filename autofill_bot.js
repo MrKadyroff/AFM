@@ -944,10 +944,44 @@ function bindActionButtonOnce(btn, statusValue) {
         } catch (err) { console.error('Ошибка запроса:', err); }
     });
 }
+// Нормализация подписи кнопки: нижний регистр, ё→е, неразрывные пробелы,
+// схлопывание пробелов и удаление пунктуации. «Отправить в АФМ», «ОТПРАВИТЬ  В АФМ»,
+// «Отправить в АФМ РК» и т.п. приводятся к одному виду.
+function normAfmLabel(s) {
+    return (s || "")
+        .replace(/ /g, " ")
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .trim();
+}
+
+function isSubmitToAfmLabel(text) {
+    const t = normAfmLabel(text);
+    if (!t) return false;
+    // Основной вариант: есть и «отправить», и «афм» (в любом регистре и порядке слов).
+    if (t.includes("отправ") && t.includes("афм")) return true;
+    // Запасной вариант: кнопка подписана просто «Отправить».
+    return t === "отправить" || t === "отправка";
+}
+
+function findSubmitToAfmButtons() {
+    const selector = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+    return Array.from(document.querySelectorAll(selector)).filter(el => {
+        const label = el.tagName === "INPUT"
+            ? el.value
+            : (el.innerText || el.textContent);
+        return isSubmitToAfmLabel(label)
+            || isSubmitToAfmLabel(el.getAttribute("aria-label"))
+            || isSubmitToAfmLabel(el.getAttribute("title"));
+    });
+}
+
 function observeAndBindActionButtons() {
     const tryBindNow = () => {
         bindActionButtonOnce(document.querySelector('button[name="save"]'), 2);
-        bindActionButtonOnce(document.querySelector('button[name="subscribe"]'), 3);
+        // Статус «подписан» ставим только по кнопке «Отправить в АФМ».
+        findSubmitToAfmButtons().forEach(btn => bindActionButtonOnce(btn, 3));
     };
     tryBindNow();
     const observer = new MutationObserver(() => tryBindNow());
