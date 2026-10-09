@@ -11,6 +11,9 @@
 /* =========================
    [0] Глобальное состояние
    ========================= */
+// API: расширение (afm-ext / afm-ext-dev) выставляет data-afm-api-base на <html> до загрузки скрипта.
+// Без расширения (Tampermonkey) — бой.
+const AFM_API_BASE = (document.documentElement.dataset.afmApiBase || "https://api.quiq.kz").replace(/\/+$/, "");
 const AFM_STATE = { businessKey: "", initiator: "", requestId: "", afmDocId: "", operationNumber: "" };
 // Поля, которые только читаем, НО НЕ меняем
 const AFM_PROTECTED_NAMES = new Set(["form.form_number"]);
@@ -98,6 +101,125 @@ function readByFieldNamesFromDomRich(...names) {
 }
 
 /* =========================
+   [PROF] Профилировщик автозаполнения
+   Таблица в консоли: console.table после заполнения, данные в window.__AFM_PROF
+   Отключить: localStorage.afm_prof = "0"
+   ========================= */
+const AFM_PROF = {
+    on: (() => { try { return localStorage.getItem("afm_prof") !== "0"; } catch { return true; } })(),
+    cur: null, records: [], stages: [], t0: 0, mut: 0, longMs: 0, longN: 0, _mo: null, _lo: null,
+    _now: () => performance.now(),
+    start() {
+        if (!this.on) return;
+        this.records = []; this.stages = []; this.cur = null; this.mut = 0; this.longMs = 0; this.longN = 0;
+        this.t0 = this._now();
+        try {
+            this._mo && this._mo.disconnect();
+            this._mo = new MutationObserver(m => { this.mut += m.length; });
+            this._mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+        } catch { }
+        try {
+            this._lo && this._lo.disconnect();
+            this._lo = new PerformanceObserver(l => { for (const e of l.getEntries()) { this.longMs += e.duration; this.longN++; } });
+            this._lo.observe({ entryTypes: ["longtask"] });
+        } catch { }
+    },
+    stop() {
+        try { this._mo && this._mo.takeRecords(); this._mo && this._mo.disconnect(); } catch { }
+        try { this._lo && this._lo.disconnect(); } catch { }
+    },
+    stage(name, ms) { if (this.on) this.stages.push({ stage: name, ms: Math.round(ms) }); },
+    begin(field, pass) {
+        if (!this.on) return;
+        this.cur = {
+            pass, field: field.Name, type: field.FieldType, t0: this._now(), ph: {}, sleep: 0,
+            mut0: this.mut, long0: this.longMs, dom0: document.getElementsByTagName("*").length, notes: {}
+        };
+    },
+    add(name, ms) {
+        if (!this.on || !this.cur) return;
+        this.cur.ph[name] = (this.cur.ph[name] || 0) + ms;
+    },
+    note(k, v) { if (this.on && this.cur) this.cur.notes[k] = v; },
+    lapper() {
+        let last = this._now();
+        return (name) => { const n = this._now(); this.add(name, n - last); last = n; };
+    },
+    end(ok) {
+        if (!this.on || !this.cur) return;
+        const c = this.cur, total = this._now() - c.t0;
+        const r = {
+            pass: c.pass, field: c.field, type: c.type, ok: ok ? "✓" : "✗",
+            total: Math.round(total), sleep: Math.round(c.sleep), work: Math.round(total - c.sleep),
+            mut: this.mut - c.mut0, long: Math.round(this.longMs - c.long0),
+            dom: document.getElementsByTagName("*").length, domΔ: document.getElementsByTagName("*").length - c.dom0,
+        };
+        for (const k of Object.keys(c.ph)) r[k] = Math.round(c.ph[k]);
+        Object.assign(r, c.notes);
+        this.records.push(r);
+        this.cur = null;
+        console.log(`[AFM-PROF] #${this.records.length} p${r.pass} ${r.ok} ${r.type} ${r.field} — ${r.total}мс (sleep ${r.sleep}, mut ${r.mut}, long ${r.long})`);
+    },
+    report() {
+        if (!this.on) return;
+        this.stop();
+        const R = this.records, wall = Math.round(this._now() - this.t0);
+        const sum = (a, k) => a.reduce((x, r) => x + (r[k] || 0), 0);
+        const PH = ["accordion", "find", "set", "clear", "settle", "verify", "dd_open", "dd_type", "dd_find", "dd_scroll", "dd_arrow", "dd_click"];
+        const rows = R.map((r, i) => {
+            const o = { "#": i + 1, pass: r.pass, field: r.field, type: r.type, ok: r.ok, total: r.total, sleep: r.sleep, work: r.work };
+            for (const k of PH) if (r[k] !== undefined) o[k] = r[k];
+            o.scrollSteps = r.scrollSteps; o.opts = r.opts; o.domHit = r.domHit; o.via = r.via; o.noType = r.preTyped; o.skip = r.skip; o.got = r.got; o.want = r.want;
+            o.mut = r.mut; o.long = r.long; o.dom = r.dom;
+            return o;
+        });
+        console.groupCollapsed(`[AFM-PROF] Автозаполнение: ${wall}мс, полей-попыток: ${R.length}`);
+        console.log("Этапы:"); console.table(this.stages);
+        console.log("По полям (в порядке заполнения):"); console.table(rows);
+        console.log("Топ-15 самых медленных:");
+        console.table([...rows].sort((a, b) => b.total - a.total).slice(0, 15));
+
+        const grp = (keyFn) => {
+            const m = {};
+            for (const r of R) {
+                const k = keyFn(r), g = m[k] || (m[k] = { n: 0, total: 0, sleep: 0, work: 0, mut: 0, long: 0, fail: 0 });
+                g.n++; g.total += r.total; g.sleep += r.sleep; g.work += r.work; g.mut += r.mut; g.long += r.long; if (r.ok === "✗") g.fail++;
+            }
+            for (const g of Object.values(m)) g.avg = Math.round(g.total / g.n);
+            return m;
+        };
+        console.log("По типу поля:"); console.table(grp(r => r.type));
+        console.log("По проходу (pass):"); console.table(grp(r => "pass " + r.pass));
+        const ph = {};
+        for (const k of PH) { const v = sum(R, k); if (v) ph[k] = v; }
+        console.log("Суммарно по фазам, мс:"); console.table(ph);
+
+        const fails = R.filter(r => r.ok === "✗");
+        const totalMs = sum(R, "total"), sleepMs = sum(R, "sleep");
+        const summary = {
+            wall_ms: wall, fields_attempts: R.length, fields_ok: R.length - fails.length, fails: fails.length,
+            fill_total_ms: totalMs, sleep_ms: sleepMs, sleep_pct: totalMs ? Math.round(sleepMs / totalMs * 100) : 0,
+            work_ms: totalMs - sleepMs, mutations: this.mut, longtasks_n: this.longN, longtasks_ms: Math.round(this.longMs),
+            retry_ms: sum(R.filter(r => r.pass > 1), "total"),
+            dom_nodes_end: document.getElementsByTagName("*").length,
+            cores: navigator.hardwareConcurrency, mem_gb: navigator.deviceMemory,
+            ua: navigator.userAgent, url: location.pathname, ts: new Date().toISOString(),
+        };
+        console.log("Итог:"); console.table(summary);
+        console.log("Копировать в буфер для анализа: copy(JSON.stringify(window.__AFM_PROF))");
+        console.groupEnd();
+        window.__AFM_PROF = { summary, stages: this.stages, records: R };
+        // таблица видна сразу, не только внутри свёрнутой группы
+        console.log("[AFM-PROF] ИТОГ"); console.table(summary);
+        console.table([...rows].sort((a, b) => b.total - a.total).slice(0, 10));
+    },
+};
+const psleep = async (ms) => {
+    if (AFM_PROF.cur) AFM_PROF.cur.sleep += ms;
+    await new Promise(r => setTimeout(r, ms));
+};
+
+/* =========================
    [1] Хелперы DOM/React
    ========================= */
 async function waitForElement(selector, timeout = 200) {
@@ -149,6 +271,14 @@ async function hardClearInput(el, attempts = 3) {
 }
 
 async function openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 1500) {
+    const _t = performance.now();
+    try { return await _openAccordionByHeader(headerText, expectedFieldNames, timeout); }
+    finally {
+        const ms = performance.now() - _t;
+        if (ms > 5) AFM_PROF.stage(`accordion «${headerText}»`, ms);
+    }
+}
+async function _openAccordionByHeader(headerText, expectedFieldNames = [], timeout = 1500) {
     const p = Array.from(document.querySelectorAll('p'))
         .find(e => e.textContent.trim().toLowerCase().includes(headerText.trim().toLowerCase()));
     if (!p) return false;
@@ -165,7 +295,7 @@ async function openAccordionByHeader(headerText, expectedFieldNames = [], timeou
     while (Date.now() - start < timeout) {
         const ready = expectedFieldNames.some(name => document.querySelector(`[name="${name}"]`));
         if (ready) return true;
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 30));
     }
 
     console.warn("⛔️ Аккордеон не раскрыл нужные поля:", headerText);
@@ -242,21 +372,24 @@ function setReactInputValue(el, value) {
 
 async function selectDropdownUniversal(name, value, opts = {}) {
     const {
-        openDelay = 150,
+        openDelay = 80,
         step = 500,       // шаг прокрутки
         maxScrolls = 40,  // сколько шагов максимум
-        findTimeout = 3000
+        findTimeout = 2000
     } = opts;
 
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const sleep = psleep;
+    const lap = AFM_PROF.lapper();
 
     const opener = document.querySelector(`button[name="${CSS.escape(name)}"]`);
+    AFM_PROF.note("domHit", !!opener);
     if (!opener) return false;
 
     // Открываем дропдаун
     opener.focus();
     opener.click();
     await sleep(openDelay);
+    lap("dd_open");
 
     // Если есть поле фильтра — печатаем в него
     let input = opener.closest('div')?.querySelector('input[placeholder]');
@@ -264,10 +397,10 @@ async function selectDropdownUniversal(name, value, opts = {}) {
         input = Array.from(document.querySelectorAll('input[placeholder]'))
             .find(i => i.offsetParent !== null);
     }
-    if (input) {
-        await realUserType(input, value, 20);
-        await sleep(80);
-    }
+    // В фильтр печатаем только короткий ключ: для «КОД - Описание» — код, иначе первые 30 символов.
+    const codeM = String(value ?? "").match(/^\s*([^\s]{1,20})\s+-(\s|$)/);
+    const code = codeM ? codeM[1] : "";
+    const query = code || String(value ?? "").trim().slice(0, 30);
 
     // Хелперы
     function getScrollableParent(el) {
@@ -296,19 +429,37 @@ async function selectDropdownUniversal(name, value, opts = {}) {
 
     const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const target = norm(value);
+    const codeLc = code.toLowerCase();
+    const matchOpt = (list) =>
+        list.find(btn => norm(btn.dataset?.name || btn.textContent) === target) ||
+        list.find(btn => norm(btn.dataset?.name || btn.textContent).includes(target)) ||
+        (codeLc && list.find(btn => {
+            const t = norm(btn.dataset?.name || btn.textContent);
+            return t === codeLc || t.startsWith(codeLc + " -") || t.startsWith(codeLc + " ");
+        })) || null;
 
-    let found = null;
+    // Сначала пробуем найти вариант в уже открытом списке — без ввода в фильтр
+    let found = matchOpt(getVisibleOptions());
+    AFM_PROF.note("preTyped", !!found);
+    if (!found && input && query) {
+        await realUserType(input, query, 4);
+        await sleep(40);
+    }
+    lap("dd_type");
+
     const t0 = Date.now();
+    AFM_PROF.note("opts", getVisibleOptions().length);
     while (Date.now() - t0 < findTimeout && !found) {
         const optsNow = getVisibleOptions();
-        found =
-            optsNow.find(btn => norm(btn.dataset?.name || btn.textContent) === target) ||
-            optsNow.find(btn => norm(btn.dataset?.name || btn.textContent).includes(target));
+        found = matchOpt(optsNow);
         if (found) break;
-        await sleep(60);
+        // фильтр применён, а вариантов нет вовсе — дальше ждать нечего
+        if (!optsNow.length && Date.now() - t0 > 700) break;
+        await sleep(30);
     }
+    lap("dd_find");
 
-    if (!found) {
+    if (!found && getVisibleOptions().length) {
         const probe = getVisibleOptions()[0] || input || opener;
         const scroller = getScrollableParent(probe);
 
@@ -322,17 +473,17 @@ async function selectDropdownUniversal(name, value, opts = {}) {
             await sleep(120);
 
             const optsNow = getVisibleOptions();
-            found =
-                optsNow.find(btn => norm(btn.dataset?.name || btn.textContent) === target) ||
-                optsNow.find(btn => norm(btn.dataset?.name || btn.textContent).includes(target));
+            found = matchOpt(optsNow);
             if (found) break;
 
             i++;
         }
+        AFM_PROF.note("scrollSteps", i);
+        lap("dd_scroll");
     }
 
-    if (!found && input) {
-        for (let i = 0; i < 50; i++) {
+    if (!found && input && getVisibleOptions().length) {
+        for (let i = 0; i < 15; i++) {
             input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
             await sleep(40);
             const hover = document.querySelector('[aria-selected="true"], [data-highlighted="true"]');
@@ -341,13 +492,33 @@ async function selectDropdownUniversal(name, value, opts = {}) {
                 if (txt.includes(target)) { found = hover; break; }
             }
         }
+        lap("dd_arrow");
     }
 
+    AFM_PROF.note("via", found ? (found.getAttribute?.("aria-selected") || found.dataset?.highlighted ? "arrow" : "list") : "none");
     if (found) {
-        found.click();
-        await sleep(80);
+        // Список мог перерисоваться (подгрузка с сервера) и клик ушёл в «протухший» элемент —
+        // поэтому проверяем, что значение реально выбрано, и при необходимости кликаем заново.
+        const isSelected = () => {
+            const h = document.querySelector(`input[name="${CSS.escape(name)}"]`);
+            if (h) return !!h.value;
+            const t = norm(opener.dataset?.name || opener.textContent);
+            return !!t && !t.startsWith("выберите");
+        };
+        let clicks = 0;
+        for (; clicks < 3; clicks++) {
+            found.click();
+            await sleep(40);
+            for (let i = 0; i < 8 && !isSelected(); i++) await sleep(25);
+            if (isSelected()) break;
+            const again = matchOpt(getVisibleOptions());
+            if (!again) break;
+            found = again;
+        }
+        AFM_PROF.note("clicks", clicks + 1);
         document.body.click();
-        return true;
+        lap("dd_click");
+        return isSelected();
     }
 
     return false;
@@ -372,7 +543,15 @@ function isFieldFilled(field) {
     if (field.FieldType === "input") {
         const input = document.querySelector(`[name="${field.Name}"]`);
         if (!input) return false;
-        return norm(input.value) === norm(field.Value);
+        if (norm(input.value) === norm(field.Value)) return true;
+        // Даты сайт показывает в своём формате (08/10/2026 18:42:14, а время у дат без времени отбрасывает):
+        // сравниваем только цифры, допуская что одна запись — начало другой.
+        const dRe = /^\d{2}[./]\d{2}[./]\d{4}/;
+        if (dRe.test(String(input.value)) && dRe.test(String(field.Value))) {
+            const a = String(input.value).replace(/\D/g, ""), b = String(field.Value).replace(/\D/g, "");
+            return a.length >= 8 && (b.startsWith(a) || a.startsWith(b));
+        }
+        return false;
     }
     if (field.FieldType === "checkbox") {
         const cb = document.querySelector(`input[type="checkbox"][name="${field.Name}"]`);
@@ -392,7 +571,7 @@ function isFieldFilled(field) {
 
 async function ensureSectionsForField(field) {
     if (field.Name === "operation.address.house_number") {
-        await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin]"]);
+        await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
         await openAccordionByHeader("участник 1", ["participants[0].participant"]);
         await openAccordionByHeader("банк участника операции", ["participants[0].bank.country"]);
         await openAccordionByHeader("юридический адрес", ["participants[0].legal_address.country"]);
@@ -402,6 +581,20 @@ async function ensureSectionsForField(field) {
         await openAccordionByHeader("фио", ["participants[0].full_name.last_name", "participants[0].full_name.first_name"]);
         await openAccordionByHeader("документ, удостоверяющий личность",
             ["participants[0].document.type_document", "participants[0].document.number", "participants[0].document.issue_date"]);
+    }
+
+    // Поле само открывает свою секцию, если его нет в DOM (на повторных проходах ИИН уже не в очереди,
+    // и ФИО/документ иначе остаются закрытыми).
+    if (!document.querySelector(`[name="${field.Name}"]`)) {
+        if (field.Name.startsWith("participants[0].full_name.")) {
+            await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
+            await openAccordionByHeader("участник 1", ["participants[0].participant"]);
+            await openAccordionByHeader("фио", [field.Name]);
+        } else if (field.Name.startsWith("participants[0].document.")) {
+            await openAccordionByHeader("участники", ["participants[0].participant", "participants[0].iin"]);
+            await openAccordionByHeader("участник 1", ["participants[0].participant"]);
+            await openAccordionByHeader("документ, удостоверяющий личность", [field.Name]);
+        }
     }
 }
 
@@ -442,27 +635,64 @@ async function clearField(field) {
         return;
     }
 }
-async function fillFieldOnce(field) {
+async function fillFieldOnce(field, pass = 1) {
+    const lap = AFM_PROF.lapper();
+    const emptyVal = field.Value === "" || field.Value == null;
+    // Секции открываем ДО пропуска пустых: ИИН пуст, но именно он раскрывает «ФИО» и «Документ»
     await ensureSectionsForField(field);
+    lap("accordion");
+    // Пустое значение: если поле уже пустое или его нет в DOM — делать нечего
+    if (emptyVal && field.FieldType !== "checkbox") {
+        const exists = field.FieldType === "select"
+            ? document.querySelector(`button[name="${CSS.escape(field.Name)}"]`)
+            : document.querySelector(`[name="${field.Name}"]`);
+        if (!exists || isFieldFilled(field)) { AFM_PROF.note("skip", "empty"); return true; }
+    }
 
     if (field.FieldType === "input") {
         let el = document.querySelector(`[name="${field.Name}"]`);
+        AFM_PROF.note("domHit", !!el);
         if (!el) {
+            // поля может не быть вовсе (условное) — долго не ждём, на повторных проходах не ждём совсем
+            const maxWait = pass > 1 ? 0 : 400;
             const start = Date.now();
-            while (!el && Date.now() - start < 2000) {
-                await new Promise(r => setTimeout(r, 100));
+            while (!el && Date.now() - start < maxWait) {
+                await psleep(50);
                 el = document.querySelector(`[name="${field.Name}"]`);
             }
         }
+        lap("find");
         if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) setReactInputValue(el, field.Value);
+        lap("set");
     } else if (field.FieldType === "select") {
         await selectDropdownUniversal(field.Name, field.Value);
+        lap("dd_other");
     } else if (field.FieldType === "checkbox") {
         setReactCheckbox(field.Name, field.Value);
+        lap("set");
     }
 
-    await new Promise(r => setTimeout(r, 60));
-    return isFieldFilled(field);
+    // вместо фиксированных 60 мс: проверяем сразу и ждём только если не встало
+    let ok = isFieldFilled(field);
+    const present = field.FieldType === "select"
+        ? document.querySelector(`button[name="${CSS.escape(field.Name)}"]`)
+        : document.querySelector(`[name="${field.Name}"]`);
+    // Если элемента нет в DOM — ждать проверку бессмысленно
+    for (let i = 0; !ok && present && i < 6; i++) {
+        await psleep(25);
+        ok = isFieldFilled(field);
+    }
+    lap("settle");
+    if (!ok) {
+        try {
+            const el = field.FieldType === "select"
+                ? (document.querySelector(`input[name="${field.Name}"]`) || document.querySelector(`button[name="${field.Name}"]`))
+                : document.querySelector(`[name="${field.Name}"]`);
+            AFM_PROF.note("got", el ? String(el.value || el.dataset?.name || el.textContent || "").slice(0, 60) : "<нет элемента>");
+            AFM_PROF.note("want", String(field.Value ?? "").slice(0, 60));
+        } catch { }
+    }
+    return ok;
 }
 
 /** Многопроходная заливка: с 2-го прохода предварительно очищаем поля
@@ -476,18 +706,23 @@ async function fillFieldsWithRetries(fields, maxPasses = 3) {
     const TOTAL = queue.length;
     let doneNames = new Set();
     updateOverlayCounters({ total: TOTAL, filled: 0 }); // инициализация
+    const _tFill = performance.now();
 
     for (let pass = 1; pass <= maxPasses && queue.length; pass++) {
         const next = [];
         if (pass > 1) await new Promise(r => setTimeout(r, 120));
 
         for (const field of queue) {
+            AFM_PROF.begin(field, pass);
             if (pass > 1) {
+                const lapC = AFM_PROF.lapper();
                 try { await clearField(field); } catch (e) { console.warn("[AFM] clearField error:", field.Name, e); }
-                await new Promise(r => setTimeout(r, 40));
+                await psleep(40);
+                lapC("clear");
             }
 
-            const ok = await fillFieldOnce(field);
+            const ok = await fillFieldOnce(field, pass);
+            AFM_PROF.end(ok);
             if (!ok) {
                 next.push(field);
             } else {
@@ -498,6 +733,7 @@ async function fillFieldsWithRetries(fields, maxPasses = 3) {
         queue = next;
         console.log(`[AFM] Pass ${pass} done, remaining: ${queue.length}`);
     }
+    AFM_PROF.stage("fillFieldsWithRetries (всего)", performance.now() - _tFill);
     return queue;
 }
 
@@ -919,6 +1155,23 @@ function readStoredValue(key) {
     try { return localStorage.getItem(key) || ""; } catch { return ""; }
 }
 
+function decodeJwt(token) {
+    try {
+        const part = (token.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/");
+        const json = decodeURIComponent(atob(part).split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+        return JSON.parse(json);
+    } catch { return null; }
+}
+
+// org_id лежит в payload JWT из localStorage.access_token (claim organization_id).
+function readOrgId() {
+    const claims = decodeJwt(readStoredValue("access_token")) || {};
+    const key = Object.keys(claims).find(k => /(^|[/:._-])(organization_id|org_id|organizationid|orgid)$/i.test(k));
+    if (key && claims[key] != null) return String(claims[key]);
+    console.warn("[AFM] organization_id не найден в JWT, claims:", Object.keys(claims));
+    return "";
+}
+
 function afmStatusHeaders() {
     const headers = { 'Content-Type': 'application/json' };
     const token = readStoredValue("access_token");
@@ -946,6 +1199,24 @@ function showOrgMismatchModal() {
     document.body.appendChild(root);
 }
 
+// Плашка с ошибкой отправки статуса. Показывает, на какой API ушёл запрос (бой/dev).
+function showAfmError(title, detail = "") {
+    try {
+        document.getElementById("afm-status-error")?.remove();
+        const host = (() => { try { return new URL(AFM_API_BASE).host; } catch { return AFM_API_BASE; } })();
+        const root = document.createElement("div");
+        root.id = "afm-status-error";
+        root.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:100003;max-width:min(560px,94vw);padding:14px 16px;border-radius:12px;background:#7f1d1d;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer;";
+        const esc = t => String(t ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+        root.innerHTML = `<div style="font-weight:700;margin-bottom:4px;">${esc(title)}</div>`
+            + (detail ? `<div style="opacity:.92;word-break:break-word;">${esc(detail)}</div>` : "")
+            + `<div style="opacity:.7;font-size:12px;margin-top:6px;">API: ${esc(host)} · нажмите, чтобы закрыть</div>`;
+        root.addEventListener("click", () => root.remove());
+        document.body.appendChild(root);
+        setTimeout(() => root.remove(), 15000);
+    } catch { }
+}
+
 // Предпроверка: сначала шлём статус в наш API, и только если ЭЦП подходит —
 // пропускаем клик к обработчику сайта. При "org mismatch" клик гасится.
 // Сетевые сбои проверку не блокируют (как и раньше, только пишем в консоль).
@@ -964,18 +1235,35 @@ async function sendAfmStatus(statusValue) {
         savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
         subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
         saveUserIp: "", subscribeUserIp: "", status: statusValue,
-        org_id: readStoredValue("organization_id")
+        org_id: readOrgId()
     };
     console.log("[AFM] afmStatus payload", payload);
+    const what = statusValue === 2 ? "сохранения" : "подписи/отправки";
+    if (!payload.requestId) {
+        showAfmError(`Статус ${what} не отправлен`, "Не найден номер заявки на странице. Проверьте, что форма заполнена и номер операции указан.");
+    }
     try {
-        const resp = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
+        const resp = await fetch(`${AFM_API_BASE}/Application/afmStatus`, {
             method: 'POST', headers: afmStatusHeaders(), body: JSON.stringify(payload)
         });
         let body = null;
         try { body = await resp.json(); } catch { }
         if (body && body.code === "org mismatch") return false;
-        if (!resp.ok) throw new Error('Network response was not ok');
-    } catch (err) { console.error('Ошибка запроса:', err); }
+        if (!resp.ok) {
+            const msg = typeof body === "string" ? body : (body?.message || body?.title || "");
+            showAfmError(`Статус ${what} не отправлен (HTTP ${resp.status})`, msg);
+            throw new Error('Network response was not ok: ' + resp.status);
+        }
+        // Бэкенд отвечает 200 и строкой: "updated" — успех, остальное ("not found", "error", ...) — ошибка.
+        if (typeof body === "string" && body !== "updated") {
+            showAfmError(`Статус ${what} не обновлён`, `Ответ сервера: ${body}`);
+        }
+    } catch (err) {
+        console.error('Ошибка запроса:', err);
+        if (!document.getElementById("afm-status-error")) {
+            showAfmError(`Статус ${what} не отправлен`, err?.message || String(err));
+        }
+    }
     return true;
 }
 
@@ -1022,22 +1310,28 @@ function isSubmitToAfmLabel(text) {
     return t === "отправить" || t === "отправка";
 }
 
+// Кнопка «Подписать» (точная подпись, чтобы не зацепить заголовки и ссылки с этим словом).
+function isSignLabel(text) {
+    const t = normAfmLabel(text);
+    return t === "подписать" || t.startsWith("подписать ");
+}
+
 function findSubmitToAfmButtons() {
     const selector = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
     return Array.from(document.querySelectorAll(selector)).filter(el => {
         const label = el.tagName === "INPUT"
             ? el.value
             : (el.innerText || el.textContent);
-        return isSubmitToAfmLabel(label)
-            || isSubmitToAfmLabel(el.getAttribute("aria-label"))
-            || isSubmitToAfmLabel(el.getAttribute("title"));
+        return isSubmitToAfmLabel(label) || isSignLabel(label)
+            || isSubmitToAfmLabel(el.getAttribute("aria-label")) || isSignLabel(el.getAttribute("aria-label"))
+            || isSubmitToAfmLabel(el.getAttribute("title")) || isSignLabel(el.getAttribute("title"));
     });
 }
 
 function observeAndBindActionButtons() {
     const tryBindNow = () => {
         bindActionButtonOnce(document.querySelector('button[name="save"]'), 2);
-        // Статус «подписан» ставим только по кнопке «Отправить в АФМ».
+        // Статус «подписан» ставим по кнопкам «Отправить в АФМ» и «Подписать».
         findSubmitToAfmButtons().forEach(btn => bindActionButtonOnce(btn, 3));
     };
     tryBindNow();
@@ -1765,9 +2059,14 @@ function installDeleteGuard() {
             lockInteraction();
 
             (async () => {
+                AFM_PROF.start();
+                let _t = performance.now();
                 try {
                     const fields = await getDataFromBuffer();
+                    AFM_PROF.stage("getDataFromBuffer (clipboard)", performance.now() - _t);
                     await new Promise(r => setTimeout(r, 100));
+                    AFM_PROF.stage("пауза после буфера (фикс.)", 100);
+                    _t = performance.now();
 
                     if (fields?.json == null) {
                         setButtonState("active", "Заполнить");
@@ -1780,6 +2079,7 @@ function installDeleteGuard() {
                     await openAccordionByHeader("форма фм-1", ["form.operation_state", "form.operation_date"]);
                     await openAccordionByHeader("сведения об операции", ["operation.number", "operation.currency"]);
                     await new Promise(r => setTimeout(r, 200));
+                    AFM_PROF.stage("раскрытие основных секций (вкл. фикс. 200)", performance.now() - _t);
 
                     // Инициатор/бизнес-ключ
                     const maybeBK = fields.json.find(f => f.Name === "businessKey")?.Value;
@@ -1805,6 +2105,7 @@ function installDeleteGuard() {
                     console.error("[AFM] Autofill error:", e);
                     setButtonState("active", "Заполнить");
                 } finally {
+                    try { AFM_PROF.report(); } catch (e) { console.warn("[AFM-PROF] report error", e); }
                     hideOverlay();
                     unlockInteraction();
                 }

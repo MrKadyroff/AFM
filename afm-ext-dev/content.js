@@ -5,7 +5,7 @@
     window.__AFM_RUNTIME_BOOTSTRAPPED__ = true;
 
     // Окружение API: бой — api.quiq.kz, dev — api-dev.quiq.kz. Читается скриптом из data-атрибута.
-    document.documentElement.dataset.afmApiBase = "https://api.quiq.kz";
+    document.documentElement.dataset.afmApiBase = "https://api-dev.quiq.kz";
 
     const remoteUrl = "https://raw.githubusercontent.com/MrKadyroff/AFM/refs/heads/main/autofill_bot.js?cache=" + Date.now();
     const localUrl = chrome.runtime.getURL("payload/autofill_runtime.js");
