@@ -915,6 +915,54 @@ function unlockInteraction() {
 /* ==============================================
    [4] Мониторинг и привязка кнопок save/subscribe
    ============================================== */
+function readStoredValue(key) {
+    try { return localStorage.getItem(key) || ""; } catch { return ""; }
+}
+
+function decodeJwt(token) {
+    try {
+        const part = (token.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/");
+        const json = decodeURIComponent(atob(part).split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+        return JSON.parse(json);
+    } catch { return null; }
+}
+
+function showAuthDebug() {
+    const token = readStoredValue("access_token");
+    const info = {
+        organization_id: readStoredValue("organization_id"),
+        access_token_present: !!token,
+        jwt_payload: token ? decodeJwt(token) : null
+    };
+    console.log("[AFM] auth debug", info);
+    let box = document.getElementById("afm-auth-debug");
+    if (!box) {
+        box = document.createElement("pre");
+        box.id = "afm-auth-debug";
+        box.style.cssText = "position:fixed;left:12px;bottom:56px;z-index:100001;max-width:480px;max-height:60vh;overflow:auto;margin:0;padding:12px;background:#222;color:#0f0;font-size:12px;border-radius:8px;white-space:pre-wrap;word-break:break-all;";
+        box.addEventListener("click", () => box.remove());
+        document.body.appendChild(box);
+    }
+    box.textContent = JSON.stringify(info, null, 2);
+}
+
+function installAuthDebugButton() {
+    if (document.getElementById("afm-auth-debug-btn")) return;
+    const b = document.createElement("button");
+    b.id = "afm-auth-debug-btn";
+    b.innerText = "Token / Org";
+    b.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:100001;padding:8px 14px;font-size:13px;border:none;border-radius:6px;background:#555;color:#fff;cursor:pointer;";
+    b.addEventListener("click", showAuthDebug);
+    document.body.appendChild(b);
+}
+
+function afmStatusHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    const token = readStoredValue("access_token");
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+}
+
 function bindActionButtonOnce(btn, statusValue) {
     if (!btn || btn.hasAttribute('afm-listener')) return;
     btn.setAttribute('afm-listener', '1');
@@ -933,12 +981,13 @@ function bindActionButtonOnce(btn, statusValue) {
             afmId: getAppIdFromUrl(),
             savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
             subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
-            saveUserIp: "", subscribeUserIp: "", status: statusValue
+            saveUserIp: "", subscribeUserIp: "", status: statusValue,
+            organization_id: readStoredValue("organization_id")
         };
         console.log("[AFM] afmStatus payload", payload);
         try {
             const resp = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                method: 'POST', headers: afmStatusHeaders(), body: JSON.stringify(payload)
             });
             if (!resp.ok) throw new Error('Network response was not ok');
         } catch (err) { console.error('Ошибка запроса:', err); }
@@ -1671,6 +1720,7 @@ function installDeleteGuard() {
         window.__afmAdminOff = () => localStorage.removeItem(AFM_ADMIN_UNLOCK_KEY);
 
         observeAndBindActionButtons();
+        installAuthDebugButton();
         installDeleteGuard();
 
         // Подсказка по языку и буферу
