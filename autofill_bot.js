@@ -919,43 +919,6 @@ function readStoredValue(key) {
     try { return localStorage.getItem(key) || ""; } catch { return ""; }
 }
 
-function decodeJwt(token) {
-    try {
-        const part = (token.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/");
-        const json = decodeURIComponent(atob(part).split("").map(c => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
-        return JSON.parse(json);
-    } catch { return null; }
-}
-
-function showAuthDebug() {
-    const token = readStoredValue("access_token");
-    const info = {
-        organization_id: readStoredValue("organization_id"),
-        access_token_present: !!token,
-        jwt_payload: token ? decodeJwt(token) : null
-    };
-    console.log("[AFM] auth debug", info);
-    let box = document.getElementById("afm-auth-debug");
-    if (!box) {
-        box = document.createElement("pre");
-        box.id = "afm-auth-debug";
-        box.style.cssText = "position:fixed;left:12px;bottom:56px;z-index:100001;max-width:480px;max-height:60vh;overflow:auto;margin:0;padding:12px;background:#222;color:#0f0;font-size:12px;border-radius:8px;white-space:pre-wrap;word-break:break-all;";
-        box.addEventListener("click", () => box.remove());
-        document.body.appendChild(box);
-    }
-    box.textContent = JSON.stringify(info, null, 2);
-}
-
-function installAuthDebugButton() {
-    if (document.getElementById("afm-auth-debug-btn")) return;
-    const b = document.createElement("button");
-    b.id = "afm-auth-debug-btn";
-    b.innerText = "Token / Org";
-    b.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:100001;padding:8px 14px;font-size:13px;border:none;border-radius:6px;background:#555;color:#fff;cursor:pointer;";
-    b.addEventListener("click", showAuthDebug);
-    document.body.appendChild(b);
-}
-
 function afmStatusHeaders() {
     const headers = { 'Content-Type': 'application/json' };
     const token = readStoredValue("access_token");
@@ -963,35 +926,80 @@ function afmStatusHeaders() {
     return headers;
 }
 
+function showOrgMismatchModal() {
+    document.getElementById("afm-org-mismatch")?.remove();
+    const root = document.createElement("div");
+    root.id = "afm-org-mismatch";
+    root.style.cssText = "position:fixed;inset:0;z-index:100002;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);";
+    root.innerHTML = `
+        <div style="max-width:420px;padding:22px;border-radius:14px;background:#1f2937;color:#fff;font-family:sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.5);">
+            <div style="font-size:18px;font-weight:700;margin-bottom:10px;">Выбран некорректный ЭЦП</div>
+            <div style="font-size:14px;line-height:1.45;">ЭЦП не соответствует вашей организации, статус заявки не обновлён.
+            Выберите корректный ЭЦП и повторите действие.</div>
+            <div style="text-align:right;margin-top:16px;">
+                <button style="padding:9px 18px;border:none;border-radius:10px;background:#ef4444;color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Закрыть</button>
+            </div>
+        </div>`;
+    root.addEventListener("click", e => {
+        if (e.target === root || e.target.tagName === "BUTTON") root.remove();
+    });
+    document.body.appendChild(root);
+}
+
+// Предпроверка: сначала шлём статус в наш API, и только если ЭЦП подходит —
+// пропускаем клик к обработчику сайта. При "org mismatch" клик гасится.
+// Сетевые сбои проверку не блокируют (как и раньше, только пишем в консоль).
+async function sendAfmStatus(statusValue) {
+    const strictAfmDocId = await waitForAfmDocIdBeforeSubmit(18, 160);
+    const ids = await waitForStatusIdentifiers(8, 140);
+    let afmDocId = pickFormNumber(strictAfmDocId, ids.afmDocId);
+    if (!afmDocId) afmDocId = pickFormNumber(await getAfmDocId());
+    const requestId = ids.operationNumber || await getRequestIdForStatus();
+    const operationNumber = firstNonEmpty(ids.operationNumber, AFM_STATE.operationNumber, requestId);
+    const payload = {
+        requestId: firstNonEmpty(operationNumber, AFM_STATE.requestId, afmDocId, getAppIdFromUrl()),
+        // AfmDocId — только номер формы; id заявки из URL идёт отдельно в afmId.
+        AfmDocId: afmDocId || "",
+        afmId: getAppIdFromUrl(),
+        savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
+        subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
+        saveUserIp: "", subscribeUserIp: "", status: statusValue,
+        org_id: readStoredValue("organization_id")
+    };
+    console.log("[AFM] afmStatus payload", payload);
+    try {
+        const resp = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
+            method: 'POST', headers: afmStatusHeaders(), body: JSON.stringify(payload)
+        });
+        let body = null;
+        try { body = await resp.json(); } catch { }
+        if (body && body.code === "org mismatch") return false;
+        if (!resp.ok) throw new Error('Network response was not ok');
+    } catch (err) { console.error('Ошибка запроса:', err); }
+    return true;
+}
+
 function bindActionButtonOnce(btn, statusValue) {
     if (!btn || btn.hasAttribute('afm-listener')) return;
     btn.setAttribute('afm-listener', '1');
 
-    btn.addEventListener('click', async () => {
-        const strictAfmDocId = await waitForAfmDocIdBeforeSubmit(18, 160);
-        const ids = await waitForStatusIdentifiers(8, 140);
-        let afmDocId = pickFormNumber(strictAfmDocId, ids.afmDocId);
-        if (!afmDocId) afmDocId = pickFormNumber(await getAfmDocId());
-        const requestId = ids.operationNumber || await getRequestIdForStatus();
-        const operationNumber = firstNonEmpty(ids.operationNumber, AFM_STATE.operationNumber, requestId);
-        const payload = {
-            requestId: firstNonEmpty(operationNumber, AFM_STATE.requestId, afmDocId, getAppIdFromUrl()),
-            // AfmDocId — только номер формы; id заявки из URL идёт отдельно в afmId.
-            AfmDocId: afmDocId || "",
-            afmId: getAppIdFromUrl(),
-            savedByUser: statusValue === 2 ? (AFM_STATE.initiator || "") : "",
-            subscribedByUser: statusValue === 3 ? (AFM_STATE.initiator || "") : "",
-            saveUserIp: "", subscribeUserIp: "", status: statusValue,
-            organization_id: readStoredValue("organization_id")
-        };
-        console.log("[AFM] afmStatus payload", payload);
+    let passThrough = false;
+    let busy = false;
+    // capture + stopImmediatePropagation: наш обработчик идёт раньше обработчиков сайта.
+    btn.addEventListener('click', async (e) => {
+        if (passThrough) { passThrough = false; return; }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (busy) return;
+        busy = true;
         try {
-            const resp = await fetch(`https://api.quiq.kz/Application/afmStatus`, {
-                method: 'POST', headers: afmStatusHeaders(), body: JSON.stringify(payload)
-            });
-            if (!resp.ok) throw new Error('Network response was not ok');
-        } catch (err) { console.error('Ошибка запроса:', err); }
-    });
+            const ok = await sendAfmStatus(statusValue);
+            if (!ok) { showOrgMismatchModal(); return; }
+            passThrough = true;
+            btn.click();
+            passThrough = false;
+        } finally { busy = false; }
+    }, true);
 }
 // Нормализация подписи кнопки: нижний регистр, ё→е, неразрывные пробелы,
 // схлопывание пробелов и удаление пунктуации. «Отправить в АФМ», «ОТПРАВИТЬ  В АФМ»,
@@ -1720,7 +1728,6 @@ function installDeleteGuard() {
         window.__afmAdminOff = () => localStorage.removeItem(AFM_ADMIN_UNLOCK_KEY);
 
         observeAndBindActionButtons();
-        installAuthDebugButton();
         installDeleteGuard();
 
         // Подсказка по языку и буферу
